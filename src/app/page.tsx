@@ -26,7 +26,7 @@ export default function HomePage() {
             </Link>
           </div>
           <p className="fine-print">
-            現在は段階Aです。入力内容の保存や公開はまだ行いません。
+            絵馬の作成と本人管理を実装済みです。Canvas地図と近くへの招待は、後続の段階で追加します。
           </p>
         </div>
         <div className="hero__visual" aria-hidden="true">
@@ -53,14 +53,16 @@ export default function HomePage() {
               2
             </span>
             <h2>場所を選ぶ</h2>
-            <p>100万枠の中から、空いている場所を確認して選びます。</p>
+            <p>100万枠の番号から選び、保存するときに空きを確認します。</p>
           </article>
           <article className="feature-card">
             <span className="feature-card__number" aria-hidden="true">
               3
             </span>
-            <h2>近くに招く</h2>
-            <p>掛けた後は、友達が近くを選べるリンクを共有できます。</p>
+            <h2>あとから管理する</h2>
+            <p>
+              掛けた後は、自分の絵馬の確認・編集・削除や、任意のメール引継ぎができます。
+            </p>
           </article>
         </div>
       </section>

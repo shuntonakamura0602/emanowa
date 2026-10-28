@@ -9,7 +9,7 @@ export default function PrivacyPage() {
     <section className="container page-section">
       <PageIntro eyebrow="公開準備中" title="プライバシーについて">
         <p>
-          このページは段階Aの説明です。採用する外部サービスと保存期間を確定し、実際の挙動に合わせて正式な文面を整えます。
+          これは公開前の暫定説明です。運営者情報と保存期間を確定し、実際の運用に合わせて正式な文面を整えます。
         </p>
       </PageIntro>
 
@@ -17,7 +17,7 @@ export default function PrivacyPage() {
         <section className="policy-section">
           <h2>願いの本文</h2>
           <p>
-            本文を「自分だけ」にした場合、公開API、HTML、共有画像、メタ情報へ含めない設計にします。入力内容を外部AIへ送信しません。
+            本文を「自分だけ」にした場合、公開API、HTML、共有画像、メタ情報へ含めません。入力内容を外部AIへ送信しません。
           </p>
         </section>
         <section className="policy-section">

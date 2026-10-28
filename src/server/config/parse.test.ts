@@ -50,6 +50,7 @@ describe("parseServerEnvironment", () => {
     expect(config.writesAvailable).toBe(true);
     expect(config.database.roleName).toBe("emanowa_app");
     expect(config.captcha.configured).toBe(true);
+    expect(toPublicRuntimeConfigSource(config).captchaRequired).toBe(false);
   });
 
   it("does not serialize server secrets into public config", () => {
@@ -109,11 +110,52 @@ describe("parseServerEnvironment", () => {
     expect(config.captcha.required).toBe(true);
     expect(config.captcha.configured).toBe(false);
     expect(config.writesAvailable).toBe(false);
+    expect(toPublicRuntimeConfigSource(config).captchaRequired).toBe(true);
     expect(config.issues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: "NEXT_PUBLIC_CAPTCHA_SITE_KEY" }),
         expect.objectContaining({ key: "CAPTCHA_SECRET_KEY" }),
       ]),
+    );
+  });
+
+  it("fails closed when NODE_ENV is production but deployment environment is omitted", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      EMANOWA_ENVIRONMENT: undefined,
+      NODE_ENV: "production",
+    });
+
+    expect(config.environment).toBe("production");
+    expect(config.captcha.required).toBe(true);
+    expect(config.writesAvailable).toBe(false);
+    expect(config.issues).toContainEqual(
+      expect.objectContaining({
+        key: "EMANOWA_ENVIRONMENT",
+        code: "missing",
+        severity: "error",
+      }),
+    );
+  });
+
+  it("keeps production CAPTCHA required when the deployment environment is invalid", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      EMANOWA_ENVIRONMENT: "prod",
+      NODE_ENV: "production",
+      NEXT_PUBLIC_CAPTCHA_SITE_KEY: undefined,
+      CAPTCHA_SECRET_KEY: undefined,
+    });
+
+    expect(config.environment).toBe("production");
+    expect(config.captcha.required).toBe(true);
+    expect(config.writesAvailable).toBe(false);
+    expect(config.issues).toContainEqual(
+      expect.objectContaining({
+        key: "EMANOWA_ENVIRONMENT",
+        code: "invalid",
+        severity: "error",
+      }),
     );
   });
 

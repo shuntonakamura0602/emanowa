@@ -1,6 +1,6 @@
 import type { QueryResultRow } from "pg";
 
-import type { CreateEmaInput } from "@/domain";
+import type { CreateEmaInput, DeleteEmaInput, UpdateEmaInput } from "@/domain";
 import type { DatabaseClient } from "@/server/db/types";
 
 type DatabaseTimestamp = Date | string;
@@ -60,6 +60,20 @@ export interface OwnerEmaRow extends QueryResultRow {
   can_delete: boolean;
 }
 
+export interface OwnerWorldRow extends QueryResultRow {
+  world_slug: string;
+  world_name: string;
+  world_state: string;
+  public_id: string;
+  slot_number: number;
+  status: string;
+  design_id: string;
+  visibility: string;
+  message_visibility: string;
+  version: number;
+  updated_at: DatabaseTimestamp;
+}
+
 export interface CreateEmaRow extends QueryResultRow {
   public_id: string;
   world_slug: string;
@@ -68,6 +82,8 @@ export interface CreateEmaRow extends QueryResultRow {
   canonical_url: string;
   replayed: boolean;
 }
+
+export type MutationEmaRow = CreateEmaRow;
 
 export async function queryPublicWorld(
   client: DatabaseClient,
@@ -104,6 +120,20 @@ export async function queryOwnerEma(
   return result.rows[0] ?? null;
 }
 
+export async function queryOwnerWorlds(
+  client: DatabaseClient,
+  limit: number,
+  cursor: { updatedAt: string; publicId: string } | null,
+): Promise<OwnerWorldRow[]> {
+  const result = await client.query<OwnerWorldRow>(
+    `select * from app_private.list_owner_worlds(
+      $1::integer, $2::timestamptz, $3::uuid
+    )`,
+    [limit, cursor?.updatedAt ?? null, cursor?.publicId ?? null],
+  );
+  return result.rows;
+}
+
 export async function queryCreateEma(
   client: DatabaseClient,
   worldSlug: string,
@@ -135,5 +165,67 @@ export async function queryCreateEma(
   if (!row) {
     throw new Error("create_ema returned no receipt");
   }
+  return row;
+}
+
+export async function queryUpdateEma(
+  client: DatabaseClient,
+  publicId: string,
+  input: UpdateEmaInput,
+  idempotencyKey: string,
+  requestHash: Buffer,
+): Promise<MutationEmaRow> {
+  const result = await client.query<MutationEmaRow>(
+    `select * from app_private.update_ema(
+      $1::uuid, $2::integer,
+      $3::boolean, $4::text,
+      $5::boolean, $6::text,
+      $7::boolean, $8::text,
+      $9::boolean, $10::text,
+      $11::boolean, $12::text,
+      $13::boolean, $14::text,
+      $15::uuid, $16::bytea
+    )`,
+    [
+      publicId,
+      input.expectedVersion,
+      input.wishText !== undefined,
+      input.wishText ?? null,
+      input.nickname !== undefined,
+      input.nickname ?? null,
+      input.category !== undefined,
+      input.category ?? null,
+      input.designId !== undefined,
+      input.designId ?? null,
+      input.visibility !== undefined,
+      input.visibility ?? null,
+      input.messageVisibility !== undefined,
+      input.messageVisibility ?? null,
+      idempotencyKey,
+      requestHash,
+    ],
+  );
+
+  const row = result.rows[0];
+  if (!row) throw new Error("update_ema returned no receipt");
+  return row;
+}
+
+export async function queryDeleteEma(
+  client: DatabaseClient,
+  publicId: string,
+  input: DeleteEmaInput,
+  idempotencyKey: string,
+  requestHash: Buffer,
+): Promise<MutationEmaRow> {
+  const result = await client.query<MutationEmaRow>(
+    `select * from app_private.delete_ema(
+      $1::uuid, $2::integer, $3::uuid, $4::bytea
+    )`,
+    [publicId, input.expectedVersion, idempotencyKey, requestHash],
+  );
+
+  const row = result.rows[0];
+  if (!row) throw new Error("delete_ema returned no receipt");
   return row;
 }

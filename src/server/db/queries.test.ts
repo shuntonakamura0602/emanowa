@@ -3,9 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   queryCreateEma,
+  queryDeleteEma,
   queryOwnerEma,
+  queryOwnerWorlds,
   queryPublicEma,
   queryPublicWorld,
+  queryUpdateEma,
 } from "@/server/db/queries";
 import type { DatabaseClient } from "@/server/db/types";
 
@@ -41,6 +44,7 @@ describe("private database function queries", () => {
     await queryPublicWorld(database.client, "2027");
     await queryPublicEma(database.client, "2027", PUBLIC_ID);
     await queryOwnerEma(database.client, "2027");
+    await queryOwnerWorlds(database.client, 13, null);
 
     expect(database.query.mock.calls[0]).toEqual([
       expect.stringContaining("app_private.get_public_world($1::text)"),
@@ -53,6 +57,10 @@ describe("private database function queries", () => {
     expect(database.query.mock.calls[2]).toEqual([
       "select * from app_private.get_owner_ema($1::text)",
       ["2027"],
+    ]);
+    expect(database.query.mock.calls[3]).toEqual([
+      expect.stringContaining("app_private.list_owner_worlds("),
+      [13, null, null],
     ]);
   });
 
@@ -103,5 +111,59 @@ describe("private database function queries", () => {
       requestHash,
     ]);
     expect(values).toHaveLength(11);
+  });
+
+  it("passes PATCH presence flags and DELETE version without an owner argument", async () => {
+    const requestHash = Buffer.alloc(32, 9);
+    const database = recordingClient([
+      {
+        public_id: PUBLIC_ID,
+        world_slug: "2027",
+        version: 2,
+        result: "updated",
+        canonical_url: `/w/2027/e/${PUBLIC_ID}`,
+        replayed: false,
+      },
+    ]);
+
+    await queryUpdateEma(
+      database.client,
+      PUBLIC_ID,
+      { expectedVersion: 1, nickname: null, visibility: "unlisted" },
+      IDEMPOTENCY_KEY,
+      requestHash,
+    );
+    const [updateSql, updateValues] = database.query.mock.calls[0] ?? [];
+    expect(updateSql).toContain("app_private.update_ema(");
+    expect(updateValues).toEqual([
+      PUBLIC_ID,
+      1,
+      false,
+      null,
+      true,
+      null,
+      false,
+      null,
+      false,
+      null,
+      true,
+      "unlisted",
+      false,
+      null,
+      IDEMPOTENCY_KEY,
+      requestHash,
+    ]);
+
+    await queryDeleteEma(
+      database.client,
+      PUBLIC_ID,
+      { expectedVersion: 2 },
+      IDEMPOTENCY_KEY,
+      requestHash,
+    );
+    expect(database.query.mock.calls[1]).toEqual([
+      expect.stringContaining("app_private.delete_ema("),
+      [PUBLIC_ID, 2, IDEMPOTENCY_KEY, requestHash],
+    ]);
   });
 });

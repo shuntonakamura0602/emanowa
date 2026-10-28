@@ -28,6 +28,13 @@ export class AnonymousSignInError extends Error {
   }
 }
 
+export class AnonymousCaptchaRequiredError extends Error {
+  constructor() {
+    super("新しい匿名セッションにはCAPTCHAトークンが必要です。");
+    this.name = "AnonymousCaptchaRequiredError";
+  }
+}
+
 function readStatus(value: unknown): number | undefined {
   if (typeof value !== "object" || value === null || !("status" in value)) {
     return undefined;
@@ -38,6 +45,7 @@ function readStatus(value: unknown): number | undefined {
 export async function ensureAnonymousSession(
   client: AnonymousAuthClient,
   captchaToken?: string,
+  captchaRequired = false,
 ): Promise<AnonymousSessionResult> {
   const existing = await client.auth.getClaims();
 
@@ -57,6 +65,10 @@ export async function ensureAnonymousSession(
       isAnonymous: actor.isAnonymous,
       uid: actor.uid,
     };
+  }
+
+  if (captchaRequired && !captchaToken) {
+    throw new AnonymousCaptchaRequiredError();
   }
 
   const signedIn = await client.auth.signInAnonymously({

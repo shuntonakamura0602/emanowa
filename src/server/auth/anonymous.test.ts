@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AnonymousAuthClient } from "@/server/supabase/contracts";
 
-import { ensureAnonymousSession, SessionVerificationError } from "./anonymous";
+import {
+  AnonymousCaptchaRequiredError,
+  ensureAnonymousSession,
+  SessionVerificationError,
+} from "./anonymous";
 
 const UID = "11111111-1111-4111-8111-111111111111";
 
@@ -20,6 +24,18 @@ function authClient(
 }
 
 describe("ensureAnonymousSession", () => {
+  it("requires CAPTCHA only when a new public anonymous session is needed", async () => {
+    const { client, signInAnonymously } = authClient({
+      data: null,
+      error: null,
+    });
+
+    await expect(
+      ensureAnonymousSession(client, undefined, true),
+    ).rejects.toBeInstanceOf(AnonymousCaptchaRequiredError);
+    expect(signInAnonymously).not.toHaveBeenCalled();
+  });
+
   it("reuses an existing anonymous session", async () => {
     const { client, signInAnonymously } = authClient({
       data: { claims: { sub: UID, is_anonymous: true } },

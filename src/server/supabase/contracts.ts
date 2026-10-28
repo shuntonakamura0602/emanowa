@@ -7,3 +7,10 @@ export type ClaimsAuthClient = {
 export type AnonymousAuthClient = {
   auth: Pick<SupabaseClient["auth"], "getClaims" | "signInAnonymously">;
 };
+
+export type EmailAuthClient = {
+  auth: Pick<
+    SupabaseClient["auth"],
+    "getUser" | "signInWithOtp" | "signOut" | "updateUser" | "verifyOtp"
+  >;
+};

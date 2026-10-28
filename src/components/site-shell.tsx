@@ -28,17 +28,17 @@ export function ConnectionNotice() {
   const { services } = getPublicRuntimeConfig();
   const connectionMessage =
     services.status === "ready"
-      ? "外部接続の設定は揃っていますが、段階Aでは保存・認証・実データ取得をまだ有効にしていません。"
+      ? "認証・保存・本人管理を利用できます。Canvas地図は次の段階で実装します。"
       : services.status === "development_demo"
         ? "開発用サンプルが選択されています。本番保存や実際の投稿としては扱いません。"
-        : "外部サービスは未接続です。現在は画面とデータ契約だけを確認できます。";
+        : "外部サービスは未接続です。入力画面は確認できますが、保存と本人管理は利用できません。";
 
   return (
     <aside className="connection-notice" aria-label="開発環境の接続状態">
       <div className="container connection-notice__inner">
         <span className="status-dot" aria-hidden="true" />
         <p>
-          <strong>段階A：土台を確認中です。</strong> {connectionMessage}
+          <strong>段階C：絵馬の作成と本人管理。</strong> {connectionMessage}
         </p>
       </div>
     </aside>

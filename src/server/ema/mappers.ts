@@ -1,17 +1,21 @@
 import type { PublicCapabilities } from "@/config/public";
 import {
   mutationReceiptSchema,
+  ownerWorldSummarySchema,
   ownerEmaSchema,
   publicEmaSchema,
   worldResponseSchema,
   type MutationReceipt,
   type OwnerEma,
+  type OwnerWorldSummary,
   type PublicEma,
   type WorldResponse,
 } from "@/domain";
 import type {
   CreateEmaRow,
+  MutationEmaRow,
   OwnerEmaRow,
+  OwnerWorldRow,
   PublicEmaRow,
   PublicWorldRow,
 } from "@/server/db/queries";
@@ -100,6 +104,24 @@ export function mapOwnerEmaRow(row: OwnerEmaRow): OwnerEma {
   });
 }
 
+export function mapOwnerWorldRow(row: OwnerWorldRow): OwnerWorldSummary {
+  return ownerWorldSummarySchema.parse({
+    worldSlug: row.world_slug,
+    worldName: row.world_name,
+    worldState: row.world_state,
+    ema: {
+      publicId: row.public_id,
+      slotNumber: row.slot_number,
+      status: row.status,
+      designId: row.design_id,
+      visibility: row.visibility,
+      messageVisibility: row.message_visibility,
+      version: row.version,
+      updatedAt: isoTimestamp(row.updated_at),
+    },
+  });
+}
+
 export function mapCreateEmaRow(row: CreateEmaRow): {
   receipt: MutationReceipt;
   replayed: boolean;
@@ -114,4 +136,11 @@ export function mapCreateEmaRow(row: CreateEmaRow): {
     }),
     replayed: row.replayed,
   };
+}
+
+export function mapMutationEmaRow(row: MutationEmaRow): {
+  receipt: MutationReceipt;
+  replayed: boolean;
+} {
+  return mapCreateEmaRow(row);
 }

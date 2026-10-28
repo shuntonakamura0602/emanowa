@@ -19,6 +19,10 @@ export async function GET(request: Request): Promise<Response> {
     if (!actor) {
       throw new ApiRouteError("AUTH_REQUIRED", "認証が必要です。");
     }
+    authHeaders.set(
+      "X-Emanowa-Auth-Kind",
+      actor.isAnonymous ? "anonymous" : "registered",
+    );
 
     const rawWorld = new URL(request.url).searchParams.get("world");
     const worldSlug = parseQueryValue(worldSlugSchema, rawWorld, "world");

@@ -4,6 +4,7 @@ import type { EnvironmentName } from "@/server/config/parse";
 import type { AnonymousAuthClient } from "@/server/supabase/contracts";
 
 import {
+  AnonymousCaptchaRequiredError,
   AnonymousSignInError,
   ensureAnonymousSession,
   SessionVerificationError,
@@ -287,20 +288,13 @@ export function createAnonymousSessionHandler<
       );
     }
 
-    if (config.captcha.required && !body.captchaToken) {
-      return errorResponse(
-        "VALIDATION_ERROR",
-        "入力内容を確認してください。",
-        422,
-        requestId,
-        headers,
-        { captchaToken: "CAPTCHAトークンを指定してください。" },
-      );
-    }
-
     try {
       const client = await dependencies.createClient(headers, config);
-      const result = await ensureAnonymousSession(client, body.captchaToken);
+      const result = await ensureAnonymousSession(
+        client,
+        body.captchaToken,
+        config.captcha.required,
+      );
 
       return jsonResponse(
         {
@@ -311,6 +305,16 @@ export function createAnonymousSessionHandler<
         headers,
       );
     } catch (error) {
+      if (error instanceof AnonymousCaptchaRequiredError) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "入力内容を確認してください。",
+          422,
+          requestId,
+          headers,
+          { captchaToken: "CAPTCHAトークンを指定してください。" },
+        );
+      }
       if (error instanceof SessionVerificationError) {
         return errorResponse(
           "SESSION_EXPIRED",

@@ -95,3 +95,50 @@ DB migration / 設定変更:
 
 次に実装する段階:
 : 段階C「絵馬の作成と本人管理」。入力・プレビュー・簡易場所選択を現在の作成APIへ接続し、本人画面、編集・削除、version競合、再送復帰、メールOTPによる同一UIDの引継ぎを実装する。
+
+## 段階C — 絵馬の作成と本人管理
+
+対象段階:
+: P0 段階C「絵馬の作成と本人管理」（実装・ローカルDB/Auth/HTTP統合検証完了）
+
+実装した体験:
+: 願い、表示名、種類、表示番号、地図掲載範囲、本文公開範囲の入力から、地図・個別URL・共有画像相当の公開プレビュー、確認、保存、完了までを実BFFへ接続した。下書きと冪等キーはversion付きで同一タブのsessionStorageだけに保持し、保存時のopaqueな認証epochと復元時のepochが一致する場合だけ戻す。枠競合時も文面を残して近隣番号を案内する。閲覧だけでは匿名Authを作らない。
+
+: `/me` で本人原本の取得、部分更新、version競合比較、削除、通信結果不明時の同一キー再送を実装した。更新・削除は検証済みUIDだけを使い、第三者には対象の存在を知らせない。削除は本文・表示名を抹消して枠を解放し、旧公開IDは墓標として再利用しない。本人年別一覧は厳格keyset cursorのAPIを用意した。
+
+: 匿名UIDへ任意メールを追加するlink、既存メールへのOTP送信、用途別OTP検証、別Cookieでの復帰、local signoutを実装した。link前後のUID一致を確認し、既存メール競合では所有者を自動統合しない。ログアウトや別所有者への復帰時はフォーム、競合本文、冪等キー、タブ内下書きを消す。同じ絵馬への復帰を再取得で確認できた場合だけ未保存編集を保持する。
+
+: Cloudflare Turnstileを匿名Authとメール復帰要求へ接続し、staging/productionの設定不足をfail closedにした。認証確認から投稿確定、本人GET・更新・削除、メール追加/復帰要求、OTP検証、ログアウトを同じWeb Lockでタブ間直列化し、未対応時は安全側で拒否する。認証変更は秘密を含まないdurableなpending/committed/cancelled eventで調整し、失敗時は下書きを保持、成功時だけepochを進める。古い本人応答はabortと世代・epoch照合で反映せず、タブ中断でpendingが残った場合は破棄確認付きの安全な復旧経路を表示する。IME変換確定Enter、多重送信、フォーカス移動、`aria-live`、reduced motionを扱う。
+
+主な変更ファイル:
+: `supabase/migrations/20261028072833_stage_c_owner_mutations.sql`、`supabase/tests/database/stage_c_owner_management.test.sql`、`supabase/templates/`、`src/server/auth/email*.ts`、`src/server/api/owner-worlds-cursor.ts`、`src/server/db/`、`src/server/ema/`、`src/app/api/v1/auth/`、`src/app/api/v1/me/`、`src/components/auth/turnstile-challenge.tsx`、`src/components/ema/`、`scripts/stage-c-integration.mjs`、`docs/stage-c-setup.md`
+
+DB migration / 設定変更:
+: owner更新・削除と本人年別一覧のexecute-only関数、version付き行ロック、immutable mutation receipt、公開投影・占有・chunk同期、本人一覧用partial indexを追加した。ローカルAuthのメール確認を有効にし、Magic LinkとChange Emailを6桁OTP表示のテンプレートへ固定した。
+
+: `NEXT_PUBLIC_CAPTCHA_SITE_KEY` は公開allow-list、`CAPTCHA_SECRET_KEY` はサーバー専用の設定確認値とし、同じsecretをSupabase AuthのTurnstile providerへ設定する。staging/productionだけ必須で、development/testのローカルAuthは省略できる。実secret、SMTP資格情報、メールアドレス、OTPはコミットしていない。
+
+検証した経路と結果:
+: Node.js `24.17.0`、pnpm `11.25.0`でformat、ESLint、TypeScript、Vitest 18ファイル143件、本番ビルドに成功した。React品質確認では、第三者SDKの遅延読込、version付きstorage、秘密状態の最小保持、直接import、フォーカスとアクセシビリティを確認した。
+
+: DB reset後のpgTAPは段階B 50件と段階C 58件の合計108件すべて成功した。owner PATCHの冪等性、version競合、第三者404、公開範囲縮小、DELETE抹消、枠解放後の新しい公開ID、RLS、execute-only権限を確認した。`app_private` のDB lintは警告を含め問題0件だった。
+
+: 実Postgresで異なるUIDの同一枠100件同時要求は成功1件・`SLOT_TAKEN`99件、同じUIDの異なる枠は成功1件だけだった。実BFFでは独立Cookieの第三者PATCH/DELETE拒否、本人再取得、HTTP PATCH/DELETEの同一キー再送と別body拒否、削除後404、owner-only固有文言が公開JSON・HTML・RSCへ出ないことを確認した。匿名UIDを維持したメール追加、登録済み認証種別、別CookieのOTP復帰、無効OTP、既存メール競合、signoutも確認した。
+
+: Turnstile tokenのサーバー検証契約、公開環境の設定不足503・新規匿名Authのtoken不足422・Supabaseへのtoken転送を単体試験で確認した。Web Lock helperのexclusive実行・未対応時fail closed・例外後解放、本人要求世代guardのabort・古い応答拒否、二相認証eventの成功commit・HTTP失敗/network例外cancel・中断時の明示commit・永続epoch・重複排除・focus再照合、epoch不一致下書きの拒否を単体試験で確認した。作成・本人画面が同じhelper内でbody読了まで行いstate反映前に世代とdurable epochを再照合することは型検査とコードレビューで確認し、実ブラウザー2タブ検証は未実施項目に残した。Turnstile widget自体の実ブラウザ確認も外部設定後の残件である。
+
+実行していない検証と理由:
+: cloud Supabase project、SMTP、Turnstile provider、本番/stagingドメインは未接続のため、実cloudのメール到達性、CAPTCHA challenge検証、Supavisor接続、複数端末のCookie/OTP E2Eは未実施。実ブラウザー2タブでのWeb Locks・BroadcastChannel連携、Aの応答を保留したままBへ復帰・ログアウトしてAの応答が非反映になるReact結線も、純粋契約とコードレビューまでで外部設定後の確認が必要。設定と確認手順は `docs/stage-c-setup.md` に記録した。
+
+: 360/390/768/1440pxの実ブラウザ視覚確認とスクリーンリーダー実機確認は未実施。CSS、focus-visible、44px操作領域、IME抑止、ARIA、reduced motionは静的検査とコードレビューで確認した。Canvas地図は段階Dのため、段階Cは仕様どおり番号・座標の簡易選択を使う。
+
+仕様からの変更と理由:
+: 仕様の意味の変更はない。本人mutation、認証後の秘密状態、タブ間匿名Auth、CAPTCHAの実装判断は `docs/decisions.md` のADR-C-001〜004へ記録した。CAPTCHA UIは段階Fの不正利用対策を前倒しし、公開環境で段階Cの匿名投稿・復帰が設定済みでも必ず失敗する状態を残さないために接続した。
+
+既知の問題・外部設定が必要な項目:
+: 未投稿下書きには所有者を安全に照合できる作品IDがないため、OTP復帰時は前利用者への漏えい防止を優先して破棄する。投稿済み絵馬の未保存編集は、同じpublic IDへの復帰を確認できる場合だけ保持する。
+
+: cloudのproject URL/publishable key、`emanowa_app` transaction-pooler secret、migration接続、Turnstile site/secret、正規origin、本番SMTP、運営者・問い合わせ先は未設定。共有レート制限、通報、管理者の非表示・復帰は段階F、Canvas地図は段階D、共有画像と招待は段階Eの対象。
+
+次に実装する段階:
+: 段階D「地図と探索」。Canvasの移動・ズーム、疎なチャンク取得、集計表示、一覧代替、番号移動、ランダム訪問、自分の絵馬への移動を、公開範囲を維持したまま実装する。

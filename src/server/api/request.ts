@@ -3,8 +3,12 @@ import { z } from "zod";
 import {
   INPUT_LIMITS,
   createEmaInputSchema,
+  deleteEmaInputSchema,
   idempotencyKeySchema,
+  updateEmaInputSchema,
   type CreateEmaInput,
+  type DeleteEmaInput,
+  type UpdateEmaInput,
 } from "@/domain";
 import { ApiRouteError } from "@/server/api/errors";
 
@@ -108,9 +112,10 @@ export function readIdempotencyKey(request: Request): string {
   return parsed.data;
 }
 
-export async function readCreateEmaInput(
+async function readJsonInput<T>(
   request: Request,
-): Promise<CreateEmaInput> {
+  schema: z.ZodType<T>,
+): Promise<T> {
   const contentType = request.headers
     .get("content-type")
     ?.split(";", 1)[0]
@@ -136,7 +141,19 @@ export async function readCreateEmaInput(
       { fieldErrors: { request: "有効なJSONを指定してください" } },
     );
   }
-  return createEmaInputSchema.parse(value);
+  return schema.parse(value);
+}
+
+export function readCreateEmaInput(request: Request): Promise<CreateEmaInput> {
+  return readJsonInput(request, createEmaInputSchema);
+}
+
+export function readUpdateEmaInput(request: Request): Promise<UpdateEmaInput> {
+  return readJsonInput(request, updateEmaInputSchema);
+}
+
+export function readDeleteEmaInput(request: Request): Promise<DeleteEmaInput> {
+  return readJsonInput(request, deleteEmaInputSchema);
 }
 
 export function parseQueryValue<T>(

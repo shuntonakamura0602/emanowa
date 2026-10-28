@@ -73,7 +73,17 @@ function parseEnvironment(
 ): EnvironmentName {
   const raw = value(source, "EMANOWA_ENVIRONMENT");
   if (!raw) {
-    return source.NODE_ENV === "test" ? "test" : "development";
+    if (source.NODE_ENV === "production") {
+      issues.push({
+        key: "EMANOWA_ENVIRONMENT",
+        code: "missing",
+        severity: "error",
+        message:
+          "production runtimeでは staging または production を明示してください。",
+      });
+    }
+    if (source.NODE_ENV === "test") return "test";
+    return source.NODE_ENV === "production" ? "production" : "development";
   }
 
   if (
@@ -92,7 +102,7 @@ function parseEnvironment(
     message:
       "development / test / staging / production のいずれかを指定してください。",
   });
-  return "development";
+  return source.NODE_ENV === "production" ? "production" : "development";
 }
 
 function parseBoolean(
@@ -399,6 +409,7 @@ export function toPublicRuntimeConfigSource(
     supabaseUrl: config.supabase.url,
     supabasePublishableKey: config.supabase.publishableKey,
     captchaSiteKey: config.captcha.siteKey,
+    captchaRequired: config.captcha.required,
     serviceStatus: config.serviceStatus,
     databaseConfigured: config.database.configured,
     writesAvailable: config.writesAvailable,

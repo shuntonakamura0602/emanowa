@@ -11,6 +11,9 @@ describe("mapDatabaseError", () => {
     ["P1005", "IDEMPOTENCY_KEY_REUSED", 409],
     ["P1006", "OWNER_LIMIT_REACHED", 409],
     ["P1007", "SLOT_TAKEN", 409],
+    ["P1008", "NOT_FOUND", 404],
+    ["P1009", "VERSION_CONFLICT", 409],
+    ["P1010", "FORBIDDEN", 403],
   ])("maps allow-listed SQLSTATE %s", (sqlState, code, status) => {
     expect(mapDatabaseError({ code: sqlState })).toMatchObject({
       code,

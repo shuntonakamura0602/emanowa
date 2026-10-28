@@ -16,7 +16,7 @@
 - 日付: 2026-10-28
 - 関連仕様: 07 段階A・H、09 §4
 
-Next.js はローカルの `next build` でも `NODE_ENV=production` を使用するため、公開先の意味まで `NODE_ENV` だけで判定しない。`EMANOWA_ENVIRONMENT=development|test|staging|production` を追加し、空欄は development とする。本番公開では production を明示し、設定不足をエラーとして扱う。
+Next.js はローカルの `next build` でも `NODE_ENV=production` を使用するため、公開先の意味まで `NODE_ENV` だけで判定しない。`EMANOWA_ENVIRONMENT=development|test|staging|production` を追加し、開発サーバーの空欄は development とする。ただし `NODE_ENV=production` で未指定なら設定errorとして書込みを停止する。本番公開では production、stagingでは staging を必ず明示する。
 
 ## ADR-A-003: デモデータは永続化adapterにしない
 
@@ -89,3 +89,45 @@ Supabase SSRクライアントをリクエストごとに作り、認可UIDは `
 - 関連仕様: 04 §1・§14、07 段階B
 
 直接Postgres接続に `pg 8.23.1`、型に `@types/pg 8.23.1`、ローカル再現とmigration/pgTAPにSupabase CLI `2.122.0` を固定した。通常クエリはnamed prepared statementを使わず、transaction poolerで同一transaction内のactor文脈だけを利用する。CLI操作は採用版の `--help` と公式migration手順を確認し、migrationファイルは `supabase migration new` で生成した。
+
+## ADR-C-001: 本人更新・削除をversion付きexecute-only関数にする
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 04 §5・§8・§9、07 段階C・RACE-05・RACE-08
+
+PATCHとDELETEは、検証済みactor、`expectedVersion`、Idempotency-Keyとrequest hashを受ける固定search pathの内部関数で実行する。対象行をロックし、原本・占有・公開投影・chunk集計・immutable receiptを一つのtransactionで更新する。第三者には存在を知らせない404相当、古いversionには409を返し、同じキーと同じ内容は確定済み結果を返す。
+
+削除は復元操作ではなく、本文と表示名を消去して枠と一枚制限を解放する。公開IDとtombstoneは保持し、旧URLを別作品へ再利用しない。
+
+## ADR-C-002: メール引継ぎは同一UIDを確認し、復帰後の画面状態はfail-privateにする
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 02 §8、04 §4.2・§8.1、07 段階C・FLOW-08
+
+匿名利用者へのメール追加は現在の匿名セッションに対する `updateUser({ email })`、別端末の復帰は `signInWithOtp` の `shouldCreateUser:false` と用途別 `verifyOtp` を使う。linkでは確認前後のUID一致を再確認し、不一致や既存メール競合時に所有権を移動・統合しない。
+
+認証切れからの復帰時は、復帰前後で同じ本人用 `publicId` を取得できた場合だけ未保存フォームと同一冪等再送を保持する。別作品・作品なし・不正応答・通信失敗など同じ所有者だと確認できない場合は、競合本文、フォーム、冪等キー、タブ内下書きを消す。未投稿下書きには照合できる作品IDがないため、OTP復帰時は秘密情報の残留防止を優先して破棄する。
+
+## ADR-C-003: 匿名Authはタブ間排他し、公開環境の入口にTurnstileを置く
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 04 §4.1・§8.1、07 段階C・F
+
+初回の匿名Authは、ブラウザー内のPromiseだけでなく、同一originのWeb Locksで直列化する。localStorageには原子的なcompare-and-swapがなく、安全なleaseを保証できないため排他の代用にはしない。Web Locks未対応時は未ロックで新しいUIDを作らず再試行を案内する。認証確認から投稿確定までに加え、本人GET・更新・削除、メール追加/復帰要求、OTP検証、ログアウトも同じロックへ参加させ、Cookieを書き得る応答はbody読了までロック内で処理する。本人要求はabort可能な世代番号を持ち、認証変更後に旧Cookieの応答が遅着してもReact stateへ反映しない。
+
+復帰・ログアウト・メール確認は、UID等を含まない二相eventをdurable storageへ記録する。Auth要求前の `pending` で各タブは本人限定表示を一時的に隠すが、下書きと未保存編集は保持する。安全な応答本文まで受信し、認証文脈が変わった場合だけopaqueなepochを進めて `committed`、無効OTP・通信失敗・失敗したログアウト・同じUIDのlink成功はepochを保って `cancelled` とする。commit書込みが失敗してもpendingが残るため、他タブはfail-privateを維持する。タブ中断でpendingが残った場合は、利用者が破棄を確認した明示的な復旧操作だけがepochを進める。
+
+BroadcastChannelは即時通知を補助し、storage eventとfocus/visibility時の永続状態再照合を正本にする。下書きは保存時epochを持ち、一致しない旧形式・旧epochをfail-privateに復元しない。OTP成功後のUID再確認で危険なセッションを消した非2xx応答も専用private headerで認証文脈変更を示し、開始タブと他タブの秘密状態を破棄する。
+
+staging/productionではCloudflare Turnstileを匿名Authとメール復帰要求に表示する。site keyだけをClient Componentへ渡し、tokenはReact stateだけに保持してURL・storage・ログへ残さず、Auth要求ごとに破棄する。secretはSupabase Auth側とサーバー設定だけに置き、設定不足は503、token不足は422としてfail closedにする。development/testのローカルAuthではCAPTCHAを必須にしない。
+
+## ADR-C-004: 本人の年別一覧も署名不要の厳格keysetに限定する
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 04 §5・§8.2、07 段階C
+
+`/me/worlds` は検証済みactorだけをDB文脈へ渡し、利用者入力のUIDを受け付けない。cursorは `(updatedAt, publicId)` の型・形式・canonical base64urlを厳格検証し、不正値を400にする。DB関数はlookaheadを含む上限51件とpartial indexを使い、offsetや全件読み込みを避ける。

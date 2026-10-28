@@ -156,6 +156,27 @@ describe("anonymous session endpoint", () => {
     expect((await response.json()).error.fieldErrors).toEqual({
       captchaToken: "CAPTCHAトークンを指定してください。",
     });
-    expect(createClient).not.toHaveBeenCalled();
+    expect(createClient).toHaveBeenCalledOnce();
+  });
+
+  it("revalidates an existing public session without spending another CAPTCHA token", async () => {
+    const config: AnonymousEndpointConfig = {
+      ...developmentConfig,
+      environment: "production",
+      captcha: { configured: true, required: true },
+    };
+    const client = mockClient({
+      data: { claims: { sub: UID, is_anonymous: true } },
+      error: null,
+    });
+    const { POST } = handler(config, client);
+    const response = await POST(request("{}"));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      authenticated: true,
+      isAnonymous: true,
+    });
+    expect(client.auth.signInAnonymously).not.toHaveBeenCalled();
   });
 });

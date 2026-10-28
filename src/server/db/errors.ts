@@ -76,6 +76,13 @@ const CUSTOM_SQLSTATE_ERRORS = {
   ],
   P1006: ["OWNER_LIMIT_REACHED", 409, "この年には、すでに絵馬を掛けています。"],
   P1007: ["SLOT_TAKEN", 409, "この場所には、先に絵馬が掛けられました。"],
+  P1008: ["NOT_FOUND", 404, "絵馬が見つかりません。"],
+  P1009: [
+    "VERSION_CONFLICT",
+    409,
+    "別の画面で更新されています。現在の内容を確認してください。",
+  ],
+  P1010: ["FORBIDDEN", 403, "この操作は許可されていません。"],
 } as const satisfies Record<string, readonly [ApiErrorCode, number, string]>;
 
 function errorTuple(

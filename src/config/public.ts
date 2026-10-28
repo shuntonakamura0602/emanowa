@@ -19,6 +19,7 @@ export type PublicRuntimeConfig = {
     configured: boolean;
   };
   captchaSiteKey: string | null;
+  captchaRequired: boolean;
   services: {
     status: PublicServiceStatus;
     authConfigured: boolean;
@@ -34,6 +35,7 @@ export type PublicRuntimeConfigSource = {
   supabaseUrl: string | null;
   supabasePublishableKey: string | null;
   captchaSiteKey: string | null;
+  captchaRequired: boolean;
   serviceStatus: PublicServiceStatus;
   databaseConfigured: boolean;
   writesAvailable: boolean;
@@ -60,6 +62,7 @@ export function createPublicRuntimeConfig(
       configured: authConfigured,
     },
     captchaSiteKey: source.captchaSiteKey,
+    captchaRequired: source.captchaRequired,
     services: {
       status: source.serviceStatus,
       authConfigured,

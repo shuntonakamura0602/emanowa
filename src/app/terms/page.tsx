@@ -9,7 +9,7 @@ export default function TermsPage() {
     <section className="container page-section">
       <PageIntro eyebrow="公開準備中" title="利用条件">
         <p>
-          このページは段階Aの文書ルートです。実際の運営者情報、問い合わせ先、公開日、保存期間を確定してから正式な利用条件を掲示します。
+          これは公開前の暫定文面です。運営者情報、問い合わせ先、公開日、保存期間を確定してから正式な利用条件を掲示します。
         </p>
       </PageIntro>
 
@@ -29,7 +29,7 @@ export default function TermsPage() {
         <section className="policy-section">
           <h2>削除と共有先</h2>
           <p>
-            自サービス上の新しい応答からは削除した内容を返さない設計にしますが、共有先のSNSや、他の人が保存した画像まで回収できるとは約束しません。
+            自サービス上の新しい応答からは削除した内容を返しませんが、共有先のSNSや、他の人が保存した画像まで回収できるとは約束しません。
           </p>
         </section>
       </div>

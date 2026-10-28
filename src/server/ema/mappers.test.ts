@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   mapCreateEmaRow,
+  mapMutationEmaRow,
   mapOwnerEmaRow,
+  mapOwnerWorldRow,
   mapPublicEmaRow,
   mapPublicWorldRow,
 } from "@/server/ema/mappers";
@@ -88,6 +90,26 @@ describe("database DTO mappers", () => {
     });
   });
 
+  it("maps an owner world summary without private wish text", () => {
+    const summary = mapOwnerWorldRow({
+      world_slug: "2027",
+      world_name: "2027年のえまのわ",
+      world_state: "open",
+      public_id: PUBLIC_ID,
+      slot_number: 3003,
+      status: "active",
+      design_id: "basic_wood",
+      visibility: "unlisted",
+      message_visibility: "owner_only",
+      version: 2,
+      updated_at: "2026-12-20T00:00:00Z",
+    });
+
+    expect(summary.ema.publicId).toBe(PUBLIC_ID);
+    expect(summary).not.toHaveProperty("wishText");
+    expect(JSON.stringify(summary)).not.toContain(SECRET_WISH);
+  });
+
   it("maps only the allowed create receipt fields", () => {
     const result = mapCreateEmaRow({
       public_id: PUBLIC_ID,
@@ -107,6 +129,28 @@ describe("database DTO mappers", () => {
         canonicalUrl: `/w/2027/e/${PUBLIC_ID}`,
       },
       replayed: false,
+    });
+  });
+
+  it("maps update and delete receipts through the same strict DTO", () => {
+    expect(
+      mapMutationEmaRow({
+        public_id: PUBLIC_ID,
+        world_slug: "2027",
+        version: 2,
+        result: "updated",
+        canonical_url: `/w/2027/e/${PUBLIC_ID}`,
+        replayed: true,
+      }),
+    ).toEqual({
+      receipt: {
+        publicId: PUBLIC_ID,
+        worldSlug: "2027",
+        version: 2,
+        result: "updated",
+        canonicalUrl: `/w/2027/e/${PUBLIC_ID}`,
+      },
+      replayed: true,
     });
   });
 });

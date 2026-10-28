@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   assertSameOrigin,
   readCreateEmaInput,
+  readDeleteEmaInput,
   readIdempotencyKey,
+  readUpdateEmaInput,
 } from "@/server/api/request";
 
 const IDEMPOTENCY_KEY = "123e4567-e89b-42d3-a456-426614174000";
@@ -100,6 +102,24 @@ describe("API request boundary", () => {
         createRequest(validBody, {
           "content-length": String(8 * 1_024 + 1),
         }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("parses strict update and delete inputs without accepting ownership fields", async () => {
+    await expect(
+      readUpdateEmaInput(
+        createRequest(JSON.stringify({ expectedVersion: 1, nickname: null })),
+      ),
+    ).resolves.toEqual({ expectedVersion: 1, nickname: null });
+    await expect(
+      readDeleteEmaInput(createRequest(JSON.stringify({ expectedVersion: 2 }))),
+    ).resolves.toEqual({ expectedVersion: 2 });
+    await expect(
+      readUpdateEmaInput(
+        createRequest(
+          JSON.stringify({ expectedVersion: 1, ownerId: PUBLIC_ID }),
+        ),
       ),
     ).rejects.toThrow();
   });
