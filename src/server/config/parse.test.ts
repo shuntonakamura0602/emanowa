@@ -12,10 +12,11 @@ const configuredEnvironment = {
   APP_ORIGIN: "http://localhost:3000",
   NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "publishable-test-key",
-  DATABASE_URL: "postgresql://app:secret@localhost:5432/emanowa",
+  DATABASE_URL: "postgresql://emanowa_app:secret@localhost:5432/emanowa",
   MIGRATION_DATABASE_URL:
     "postgresql://migration:other-secret@localhost:5432/emanowa",
   CAPTCHA_SECRET_KEY: "captcha-secret-sentinel",
+  NEXT_PUBLIC_CAPTCHA_SITE_KEY: "captcha-site-key",
   RATE_LIMIT_HMAC_SECRET: "rate-limit-secret-sentinel",
 };
 
@@ -47,6 +48,8 @@ describe("parseServerEnvironment", () => {
     });
     expect(config.serviceStatus).toBe("ready");
     expect(config.writesAvailable).toBe(true);
+    expect(config.database.roleName).toBe("emanowa_app");
+    expect(config.captcha.configured).toBe(true);
   });
 
   it("does not serialize server secrets into public config", () => {
@@ -76,6 +79,41 @@ describe("parseServerEnvironment", () => {
         code: "forbidden",
         severity: "error",
       }),
+    );
+  });
+
+  it("rejects a privileged or unexpected role for normal API traffic", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      DATABASE_URL: "postgresql://postgres:secret@localhost:5432/emanowa",
+    });
+
+    expect(config.writesAvailable).toBe(false);
+    expect(config.issues).toContainEqual(
+      expect.objectContaining({
+        key: "DATABASE_URL",
+        code: "forbidden",
+        severity: "error",
+      }),
+    );
+  });
+
+  it("requires CAPTCHA configuration for staging and production writes", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      NEXT_PUBLIC_CAPTCHA_SITE_KEY: undefined,
+      CAPTCHA_SECRET_KEY: undefined,
+    });
+
+    expect(config.captcha.required).toBe(true);
+    expect(config.captcha.configured).toBe(false);
+    expect(config.writesAvailable).toBe(false);
+    expect(config.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "NEXT_PUBLIC_CAPTCHA_SITE_KEY" }),
+        expect.objectContaining({ key: "CAPTCHA_SECRET_KEY" }),
+      ]),
     );
   });
 

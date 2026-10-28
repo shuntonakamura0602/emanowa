@@ -2,13 +2,15 @@
 
 みんなの願いが集まる、日本語のオンライン絵馬サービスです。
 
-P0 の段階A「土台と契約」まで実装済みです。画面と共有契約は確認できますが、Supabase/Postgres への保存、匿名所有権、Canvas 地図、共有画像、通報は後続段階です。保存処理が未接続の状態で成功表示へ進むことはありません。
+P0 の段階B「DBと匿名所有権」まで実装済みです。非公開Postgres schema、限定DB role、transaction-local UID、Supabase匿名Auth、公開/本人DTO、原子的な投稿APIまで検証できます。作成・編集・削除を画面から接続するのは段階Cのため、未接続画面が保存成功を表示することはありません。
 
 ## 必要な環境
 
 - Node.js 24.17.0（`.nvmrc` / `.node-version` で固定。プロジェクト下限は22.12、Next.js単体の最低要件は20.9）
 - pnpm 11.25.0（`package.json#packageManager` で固定）
-- Supabase/Postgres は段階Bから必要。未設定でも段階Aの画面・型・テスト・ビルドは確認できます
+- Docker Desktop（ローカルSupabase/Postgres/Authの統合試験に使用）
+- Supabase CLI 2.122.0（devDependencyとして固定）
+- 外部設定なしでも画面・型・ユニットテスト・ビルドは確認でき、DockerがあればDB/Auth統合試験まで実行できます
 
 システムの既定 `node` が古い場合は、リポジトリで固定した Node を先に選択してください。
 
@@ -29,6 +31,22 @@ pnpm dev
 
 ブラウザで `http://localhost:3000` を開きます。環境変数が空の場合、外部サービス未接続であることを画面と開発ログに表示し、DB 保存へ黙って切り替えたり、デモデータを本番保存として扱ったりしません。
 
+## ローカルSupabase / DB
+
+```bash
+pnpm supabase:start
+pnpm db:reset
+pnpm db:local-role
+```
+
+最後のコマンドが表示するローカル専用 `DATABASE_URL` と、`pnpm exec supabase status --output env` のAPI URL / publishable keyを `.env.local` に設定します。詳しい値、cloud設定、限定roleの作り方は [docs/stage-b-setup.md](docs/stage-b-setup.md) にあります。
+
+停止するときは次を実行します。
+
+```bash
+pnpm supabase:stop
+```
+
 ## 設定
 
 `.env.example` は値を持たない設定一覧です。秘密情報をコミットしないでください。
@@ -47,7 +65,19 @@ pnpm dev
 | 実行環境     | `EMANOWA_ENVIRONMENT`                                    | `development` / `test` / `staging` / `production`。空欄は development     |
 | データ経路   | `EMANOWA_DATA_MODE`                                      | `database` / `demo` / `unconfigured`。staging/production では demo を拒否 |
 
-Supabase を接続するときは、プロジェクトの Connect 画面から URL と publishable key を取得します。段階Bでは匿名サインインと manual linking を有効にし、SSR は `@supabase/ssr` の Cookie 方式で構成します。`DATABASE_URL` には `postgres`、テーブル所有者、`BYPASSRLS`、`service_role` を使わず、migration 接続と分離してください。
+Supabase を接続するときは、プロジェクトの Connect 画面から URL と publishable key を取得します。匿名サインインとmanual linkingを有効にし、SSRは `@supabase/ssr` のCookie方式で構成します。`DATABASE_URL` はtransaction poolerの `emanowa_app` に限定され、`postgres`、テーブル所有者、`BYPASSRLS`、`service_role` は設定検証で拒否します。migration接続とは分離してください。staging/productionではCAPTCHA site/secret設定が揃わない匿名登録をfail closedにします。
+
+## 段階BのAPI
+
+現在の同一オリジンBFFは次を実装しています。全応答は `no-store` です。
+
+- `POST /api/v1/auth/anonymous`: 明示操作時だけ匿名セッションを作成し、既存の有効セッションは再利用
+- `GET /api/v1/worlds/{slug}`: DB時刻・受付可否・内容なし集計
+- `GET /api/v1/worlds/{slug}/emas/{publicId}`: public/unlistedの正確なURLによる公開投影。owner-only本文は常に `null`
+- `POST /api/v1/worlds/{slug}/emas`: 検証済みUID、厳密入力、Idempotency-Key、同一transactionで原子的に作成
+- `GET /api/v1/me/emas?world={slug}`: 検証済み本人だけの原本文
+
+ブラウザーからowner UID、status、public IDを指定して所有権を変更するAPIはありません。公開GETはAuth Cookie不要で、閲覧だけでは匿名アカウントを作りません。
 
 本番では `EMANOWA_ENVIRONMENT=production` を明示します。不足・不正な設定はエラーとして検出され、デモへフォールバックしません。
 
@@ -60,6 +90,14 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+Docker上の実DB/Authを含む段階B検証は、Supabase起動後に実行します。
+
+```bash
+pnpm test:stage-b
+```
+
+`test:stage-b` はDB reset、pgTAP、限定ロール、100件同時要求（最大20 DB接続）、匿名Auth、実BFF経由の投稿までをまとめて確認します。DB契約だけを再実行するときは `pnpm test:db` を使います。
 
 静的検証をまとめて実行する場合は次を使います。
 
@@ -86,9 +124,9 @@ pnpm demo:clear
 
 ## 現段階の制限
 
-- 本番の保存先は未接続です。デモ fixture やブラウザ状態を保存成功として扱いません
-- DB schema、RLS、匿名 Auth、所有権、同時投稿の原子的な競合処理は段階Bで実装します
-- 作成・編集・削除を画面からDBへ接続するのは段階Cです
+- cloud Supabase、CAPTCHA、運営用DB secretはリポジトリに設定していません。設定不足時はデモへ切り替えず書き込みを拒否します
+- 作成フォーム、本人画面、編集・削除、メールOTPを実APIへ接続するのは段階Cです
+- DBは作成の原子性・公開投影・本人取得まで実装済みです。編集・削除transactionは段階C、通報/管理処理は段階Fで接続します
 - Canvas 地図は段階D、共有画像と近くへの招待は段階Eです
 - P1/P2 のグループ、成就、課金は機能フラグを含め既定で無効です
 

@@ -44,3 +44,54 @@ DB migration / 設定変更:
 
 次に実装する段階:
 : 段階B「DBと匿名所有権」。非公開schema、P0 migrations、限定DB role、RLS、transaction-local actor、Supabase匿名Auth、公開投影、同時投稿・所有数競合の実DB検証を行う。
+
+## 段階B — DBと匿名所有権
+
+対象段階:
+: P0 段階B「DBと匿名所有権」（実装・ローカルDB/Auth/HTTP統合検証完了）
+
+実装した体験:
+: `app_private` schemaにP0の10テーブル、制約、外部キー索引、live絵馬の枠・所有者部分一意索引、公開投影、占有、chunk集計、冪等receiptを実装した。100万の空枠行は作らず、`2027` worldはmigration管理の永続データとした。
+
+: 通常BFFを非所有者・`NOBYPASSRLS`・既定`NOLOGIN`の `emanowa_app` に限定し、全10テーブルでRLSを有効化・強制した。直接table権限は与えず、固定search pathのallow-list関数だけを実行できる。Supabase Data APIから `app_private` を除外し、`anon`、`authenticated`、`service_role` からschema/table/function権限を剥奪した。
+
+: Supabase SSRのrequest-scoped client、Proxyの `getClaims()`、明示POSTだけで作る匿名セッション、検証済みUIDのtransaction-local設定を実装した。公開GETは匿名ユーザーやCookieを作らず、壊れたセッションを別UIDへ置き換えない。staging/productionはCAPTCHA設定不足をfail closedにする。
+
+: 公開world、公開詳細、本人取得、原子的作成のBFFを実装した。owner IDは入力として受け取らず、公開DTO・本人DTOを分離する。`owner_only`本文は公開投影へ保存せず、`unlisted`は直接URLだけで公開内容を取得でき、一覧・chunkでは占有だけを返す。作成はIdempotency-Key、同一所有者1枚、同一枠1枚を同じtransactionで確定する。
+
+主な変更ファイル:
+: `supabase/migrations/20261028060051_stage_b_private_schema.sql`、`supabase/config.toml`、`supabase/tests/`、`src/server/db/`、`src/server/ema/`、`src/server/auth/`、`src/server/supabase/`、`src/server/api/`、`src/app/api/v1/`、`src/proxy.ts`、`scripts/stage-b-integration.mjs`、`scripts/test-local-db.sh`、`scripts/setup-local-db-role.mjs`、`docs/stage-b-setup.md`
+
+DB migration / 設定変更:
+: Supabase CLI `2.122.0`、`pg 8.23.1`、`@types/pg 8.23.1`を固定した。ローカルではAnonymous Sign-Insとmanual linking、transaction poolerを有効にし、新規テーブルのData API自動公開を無効化した。限定roleのパスワードはmigrationへ入れず、ローカル試験と設定コマンドでランダムな一時値だけを使う。
+
+: `DATABASE_URL` は `emanowa_app` だけを受理し、cloud pooler形式のユーザー名もrole本体を検査する。migration接続を分離し、staging/productionではCAPTCHA site/secretの両方を必須とした。
+
+検証した経路と結果:
+: Node.js `24.17.0`、pnpm `11.25.0`でformat、ESLint、TypeScript、本番ビルドに成功した。Vitestは12ファイル84件すべて成功。ダミーのDB、migration、CAPTCHA、HMAC秘密値を設定した本番ビルドでも、`.next/static`、配信HTML、RSCへ秘密値が含まれないことを検索で確認した。
+
+: 完全に削除したローカルSupabase volumeから起動し、migrationと意図的なno-op seedを適用できた。pgTAPは2ファイル50件すべて成功し、10テーブル、権限、全RLS、固定search path、role非継承、2027 world、公開境界、冪等性、同一所有者・同一枠制約、原本との複合FK、commit後のactor消去を確認した。`app_private` だけを対象にDB lintを警告も失敗扱いで実行し、問題0件だった。
+
+: 実ローカルAuthで異なる匿名UIDを発行した。2 UIDの同一枠競合は成功1件・`SLOT_TAKEN`1件、同じUIDの別枠競合は成功1件・`OWNER_LIMIT_REACHED`1件。100件同時要求（最大20 DB接続）は成功1件・`SLOT_TAKEN`99件で、原本・占有・公開投影に重複や孤立行を残さなかった。
+
+: 同一冪等key/bodyは同じpublic IDを返し、別bodyは拒否した。owner-only/unlistedの固有文言が公開詳細・一覧・chunkへ漏れず、本人だけが原文を取得できた。限定roleの直接table参照とData APIの `app_private` 指定は拒否された。同じプール接続の次transactionではactorが `null`だった。
+
+: 一時Next.jsサーバーで、公開GET前後のAuthユーザー数が不変でSet-Cookieもないこと、匿名POSTが1 UIDだけを作って既存Cookieを再利用すること、匿名Cookie付き作成から本人取得・公開詳細までの実BFF経路を確認した。
+
+実行していない検証と理由:
+: cloud Supabase projectは未接続のため、実projectのtransaction pooler、Auth redirect、CAPTCHA provider、cloud DB advisor、stagingドメインでのCookie/CAPTCHA E2Eは未実施。必要なrole作成、環境変数、Auth/Data API設定、適用コマンドは `docs/stage-b-setup.md` に記録した。
+
+: 段階Bのローカル統合は直接Postgres接続上の小規模 `pg.Pool` でtransaction-local actorの破棄を検証した。cloudのSupavisor transaction modeは設定手順を整備したが、実project接続後に再確認が必要。
+
+: 作成フォーム、本人画面、編集・削除、version競合、メールOTP/manual linkingの利用フローは段階C。Canvas、共有画像、通報・管理、共有レート制限運用も後続段階のため、現在の画面は保存成功を表示しない。
+
+仕様からの変更と理由:
+: 仕様の意味の変更はない。原子的な補助テーブル更新を直接権限なしで行うため、固定search path・完全修飾名・allow-list EXECUTEの限定 `SECURITY DEFINER` 関数境界を採用した。実装判断は `docs/decisions.md` のADR-B-001〜004へ記録した。
+
+既知の問題・外部設定が必要な項目:
+: cloudのproject URL/publishable key、`emanowa_app` の環境別secret、migration接続、CAPTCHA、正規origin、運営者・問い合わせ先は未設定。設定不足時は書き込みを拒否し、デモへ切り替えない。
+
+: ローカルSupabaseがロール作成者へ持たせるADMIN所属は `inherit_option=false`・`set_option=false`であり、pgTAPでも `USAGE=false`・`SET=false`を確認した。通常BFF roleと所有者roleは試験終了時に `NOLOGIN`へ戻り、一時policyは削除される。
+
+次に実装する段階:
+: 段階C「絵馬の作成と本人管理」。入力・プレビュー・簡易場所選択を現在の作成APIへ接続し、本人画面、編集・削除、version競合、再送復帰、メールOTPによる同一UIDの引継ぎを実装する。

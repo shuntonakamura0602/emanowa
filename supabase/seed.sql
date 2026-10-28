@@ -1,0 +1,3 @@
+-- Product world data belongs to migrations so local resets and deployed
+-- environments receive the same durable record. Deliberately keep this seed
+-- empty: in particular, never generate one row for each of the million slots.

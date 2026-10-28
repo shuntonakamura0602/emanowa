@@ -35,11 +35,14 @@ export type ServerRuntimeConfig = {
   database: {
     url: string | null;
     migrationUrl: string | null;
+    roleName: string | null;
     configured: boolean;
   };
   captcha: {
     siteKey: string | null;
     secretKey: string | null;
+    configured: boolean;
+    required: boolean;
   };
   rateLimitHmacSecret: string | null;
   operations: {
@@ -161,6 +164,17 @@ function parseDatabaseUrl(
   }
 }
 
+function databaseRoleName(databaseUrl: string | null): string | null {
+  if (!databaseUrl) return null;
+
+  try {
+    const username = decodeURIComponent(new URL(databaseUrl).username);
+    return username.split(".", 1)[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 function addMissingIssue(
   issues: ConfigurationIssue[],
   environment: EnvironmentName,
@@ -251,6 +265,12 @@ export function parseServerEnvironment(
 
   const supabaseConfigured = Boolean(supabaseUrl && supabasePublishableKey);
   const databaseConfigured = Boolean(databaseUrl);
+  const databaseRole = databaseRoleName(databaseUrl);
+  const captchaSiteKey = value(source, "NEXT_PUBLIC_CAPTCHA_SITE_KEY");
+  const captchaSecretKey = value(source, "CAPTCHA_SECRET_KEY");
+  const captchaConfigured = Boolean(captchaSiteKey && captchaSecretKey);
+  const captchaRequired =
+    environment === "production" || environment === "staging";
 
   if (!appOrigin) {
     addMissingIssue(
@@ -282,6 +302,31 @@ export function parseServerEnvironment(
       environment,
       "DATABASE_URL",
       "本番保存用DBの接続がありません。",
+    );
+  }
+  if (databaseRole && databaseRole !== "emanowa_app") {
+    issues.push({
+      key: "DATABASE_URL",
+      code: "forbidden",
+      severity: "error",
+      message:
+        "通常APIは限定・非所有者・NOBYPASSRLSの emanowa_app ロールで接続してください。",
+    });
+  }
+  if (captchaRequired && !captchaSiteKey) {
+    addMissingIssue(
+      issues,
+      environment,
+      "NEXT_PUBLIC_CAPTCHA_SITE_KEY",
+      "公開環境の匿名登録にはCAPTCHA site keyが必要です。",
+    );
+  }
+  if (captchaRequired && !captchaSecretKey) {
+    addMissingIssue(
+      issues,
+      environment,
+      "CAPTCHA_SECRET_KEY",
+      "公開環境の匿名登録にはCAPTCHA secret設定が必要です。",
     );
   }
 
@@ -324,11 +369,14 @@ export function parseServerEnvironment(
     database: {
       url: databaseUrl,
       migrationUrl: migrationDatabaseUrl,
+      roleName: databaseRole,
       configured: databaseConfigured,
     },
     captcha: {
-      siteKey: value(source, "NEXT_PUBLIC_CAPTCHA_SITE_KEY"),
-      secretKey: value(source, "CAPTCHA_SECRET_KEY"),
+      siteKey: captchaSiteKey,
+      secretKey: captchaSecretKey,
+      configured: captchaConfigured,
+      required: captchaRequired,
     },
     rateLimitHmacSecret: value(source, "RATE_LIMIT_HMAC_SECRET"),
     operations: {

@@ -51,3 +51,41 @@ Next.js はローカルの `next build` でも `NODE_ENV=production` を使用�
 Next.js `16.4.3`、React/React DOM `19.3.1`、`@supabase/supabase-js` `2.118.0`、`@supabase/ssr` `0.12.7`、Zod `4.6.7` を採用し、`pnpm-lock.yaml` に固定する。Supabase JSの現行サポートとVitestの要件を合わせ、プロジェクトのNode.js下限は `22.12.0`、検証ランタイムは `24.17.0` とする。
 
 TypeScriptのレジストリ最新は7系だったが、Next.js `16.4.3` が解決する `@typescript-eslint/parser` のpeer範囲は `<6.1.0` であり、実際のlintで非互換を確認した。このため互換範囲内の最新安定版 `6.0.3` を採用した。バージョン更新時はNext.js同梱ドキュメント、Supabase changelog、peer dependency、lint/typecheck/test/buildを再確認する。
+
+## ADR-B-001: 非公開schemaはexecute-onlyの内部関数境界にする
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 04 §1・§5・§6・§9、07 段階B
+
+`app_private` をSupabase Data APIへ公開せず、`PUBLIC`、`anon`、`authenticated`、`service_role` からschema・table・function権限を剥奪する。テーブルは `emanowa_owner` が所有し、通常BFFの `emanowa_app` はallow-listした関数のEXECUTEだけを持つ。すべてのテーブルでRLSを有効化・強制し、所有者原本はtransaction-localのactorと一致する行だけを対象にする。
+
+原子的な配置では原本、占有、公開投影、chunk集計、冪等receiptを同時に更新する必要がある。通常ロールへ補助テーブルの直接権限を広げないため、内部関数は仕様が許容する限定的な `SECURITY DEFINER` とする。関数は `search_path=''`、完全修飾名、検証済みactorの必須確認、固定引数・戻り列、PUBLIC系roleからのEXECUTE revokeを持つ。公開一覧とURL限定の直接取得は別関数とし、公開投影にはowner-only本文を保存しない。
+
+## ADR-B-002: アプリ用roleの秘密はmigrationに入れない
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 04 §1・§6、07 段階B・H
+
+migrationは `emanowa_app` を `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS` で作る。固定パスワード、cloud接続文字列、project固有値はコミットしない。ローカルでは `pnpm db:local-role` と統合試験がランダムな一時パスワードを設定し、cloudではmigration適用後に管理接続から環境専用secretを設定する。
+
+アプリ設定は `DATABASE_URL` のrole名を検査し、`emanowa_app` 以外を通常APIに使用させない。remoteはtransaction-mode pooler、migration・backup・restoreは分離した直接接続を使う。
+
+## ADR-B-003: 認証文脈はCookieやSQL sessionへ永続化しない
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 04 §4・§6・§13、07 段階B
+
+Supabase SSRクライアントをリクエストごとに作り、認可UIDは `getClaims()` の検証済み `sub` だけから取得する。匿名ユーザーも `authenticated` roleになるため、role名だけを本人性に使わない。BFFは各DB処理でBEGINした後、パラメーター付き `set_config('app.actor_id', uid, true)` と必要時だけ `app.lookup_public_id` を設定し、COMMIT/ROLLBACK後に同じ接続へ値を残さない。
+
+匿名サインインは明示的な `/api/v1/auth/anonymous` POSTだけで開始する。既存の有効セッションは再利用し、未検証・壊れたCookieを新しい匿名UIDへ置き換えない。公開GETと通常の画面閲覧は匿名Authを作成しない。
+
+## ADR-B-004: 段階BのDB toolingを固定する
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 04 §1・§14、07 段階B
+
+直接Postgres接続に `pg 8.23.1`、型に `@types/pg 8.23.1`、ローカル再現とmigration/pgTAPにSupabase CLI `2.122.0` を固定した。通常クエリはnamed prepared statementを使わず、transaction poolerで同一transaction内のactor文脈だけを利用する。CLI操作は採用版の `--help` と公式migration手順を確認し、migrationファイルは `supabase migration new` で生成した。
