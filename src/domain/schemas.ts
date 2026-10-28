@@ -7,6 +7,8 @@ import {
   DESIGN_VALUES,
   EMA_STATUS_VALUES,
   MESSAGE_VISIBILITY_VALUES,
+  OVERVIEW_CELL_LIMIT,
+  OVERVIEW_CELL_SIZE_VALUES,
   OWNER_EMA_STATUS_VALUES,
   REPORT_REASON_VALUES,
   VISIBILITY_VALUES,
@@ -34,6 +36,34 @@ const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const UTC_ISO_8601_PATTERN =
   /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?Z$/u;
+const UTC_CALENDAR_DATE_PREFIX_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T/u;
+
+function isExistingUtcCalendarDate(value: string): boolean {
+  const match = UTC_CALENDAR_DATE_PREFIX_PATTERN.exec(value);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1) return false;
+
+  const isLeapYear = year % 400 === 0 || (year % 4 === 0 && year % 100 !== 0);
+  const daysInMonth = [
+    31,
+    isLeapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  return day <= (daysInMonth[month - 1] ?? 0);
+}
 
 export const categorySchema = z.enum(CATEGORY_VALUES);
 export const visibilitySchema = z.enum(VISIBILITY_VALUES);
@@ -58,13 +88,14 @@ export const worldSlugSchema = z
 export const utcIsoDateTimeSchema = z
   .string()
   .regex(UTC_ISO_8601_PATTERN, "UTCのISO 8601形式で指定してください")
-  .refine(
-    (value) => Number.isFinite(Date.parse(value)),
-    "有効な日時を指定してください",
-  );
+  .refine(isExistingUtcCalendarDate, "有効な日時を指定してください");
 
 export const versionSchema = z.number().int().min(1);
 export const revisionSchema = z.number().int().nonnegative();
+export const overviewCellSizeSchema = z.union([
+  z.literal(OVERVIEW_CELL_SIZE_VALUES[0]),
+  z.literal(OVERVIEW_CELL_SIZE_VALUES[1]),
+]);
 
 export const capabilitiesSchema = z
   .object({
@@ -126,6 +157,79 @@ export const worldResponseSchema = z
   })
   .strict();
 
+export const overviewCellSchema = z
+  .object({
+    x: xCoordinateSchema,
+    y: yCoordinateSchema,
+    occupiedCount: z.number().int().min(1).max(10_000),
+    activeCount: z.number().int().min(0).max(10_000),
+    listedCount: z.number().int().min(0).max(10_000),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.listedCount > value.activeCount ||
+      value.activeCount > value.occupiedCount
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "集計値は listedCount <= activeCount <= occupiedCount を満たす必要があります",
+      });
+    }
+  });
+
+export const overviewResponseSchema = z
+  .object({
+    cellSize: overviewCellSizeSchema,
+    cells: z.array(overviewCellSchema).max(OVERVIEW_CELL_LIMIT),
+    asOf: utcIsoDateTimeSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const seen = new Set<string>();
+    const maxCount = value.cellSize * value.cellSize;
+    const maxCells =
+      (WORLD_WIDTH / value.cellSize) * (WORLD_HEIGHT / value.cellSize);
+    if (value.cells.length > maxCells) {
+      context.addIssue({
+        code: "custom",
+        path: ["cells"],
+        message: "集計セル数がcellSizeごとの上限を超えています",
+      });
+    }
+    for (const [index, cell] of value.cells.entries()) {
+      if (
+        cell.x % value.cellSize !== 0 ||
+        cell.y % value.cellSize !== 0 ||
+        cell.x + value.cellSize > WORLD_WIDTH ||
+        cell.y + value.cellSize > WORLD_HEIGHT
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["cells", index],
+          message: "集計セルの位置がcellSizeと一致しません",
+        });
+      }
+      if (cell.occupiedCount > maxCount) {
+        context.addIssue({
+          code: "custom",
+          path: ["cells", index, "occupiedCount"],
+          message: "集計セルの最大枠数を超えています",
+        });
+      }
+      const key = `${cell.x}:${cell.y}`;
+      if (seen.has(key)) {
+        context.addIssue({
+          code: "custom",
+          path: ["cells", index],
+          message: "同じ集計セルが重複しています",
+        });
+      }
+      seen.add(key);
+    }
+  });
+
 const publicEmaShape = {
   publicId: publicIdSchema,
   worldSlug: worldSlugSchema,
@@ -179,6 +283,44 @@ export const publicEmaSchema = z
       });
     }
   });
+
+export const listedPublicEmaSchema = publicEmaSchema.refine(
+  (value) => value.visibility === "public",
+  {
+    path: ["visibility"],
+    message: "URL限定の絵馬を公開探索へ含めることはできません",
+  },
+);
+
+const publicFeedCursorSchema = z
+  .string()
+  .min(1)
+  .max(768)
+  .regex(/^[A-Za-z0-9_-]+$/u);
+
+export const publicEmaListResponseSchema = z
+  .object({
+    items: z.array(listedPublicEmaSchema).max(50),
+    nextCursor: publicFeedCursorSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const seen = new Set<string>();
+    for (const [index, item] of value.items.entries()) {
+      if (seen.has(item.publicId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index, "publicId"],
+          message: "同じ絵馬が重複しています",
+        });
+      }
+      seen.add(item.publicId);
+    }
+  });
+
+export const randomEmaResponseSchema = z
+  .object({ item: listedPublicEmaSchema.nullable() })
+  .strict();
 
 export const ownerEmaCapabilitiesSchema = z
   .object({
@@ -454,7 +596,13 @@ export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;
 export type World = z.infer<typeof worldSchema>;
 export type WorldStats = z.infer<typeof worldStatsSchema>;
 export type WorldResponse = z.infer<typeof worldResponseSchema>;
+export type OverviewCellSize = z.infer<typeof overviewCellSizeSchema>;
+export type OverviewCell = z.infer<typeof overviewCellSchema>;
+export type OverviewResponse = z.infer<typeof overviewResponseSchema>;
 export type PublicEma = z.infer<typeof publicEmaSchema>;
+export type ListedPublicEma = z.infer<typeof listedPublicEmaSchema>;
+export type PublicEmaListResponse = z.infer<typeof publicEmaListResponseSchema>;
+export type RandomEmaResponse = z.infer<typeof randomEmaResponseSchema>;
 export type OwnerEma = z.infer<typeof ownerEmaSchema>;
 export type ChunkCell = z.infer<typeof chunkCellSchema>;
 export type ChunkResponse = z.infer<typeof chunkResponseSchema>;

@@ -10,10 +10,13 @@ import {
   emaStatusSchema,
   mutationReceiptSchema,
   nicknameSchema,
+  overviewResponseSchema,
   ownerEmaSchema,
   projectChunkCell,
   projectPublicEma,
   publicEmaSchema,
+  publicEmaListResponseSchema,
+  randomEmaResponseSchema,
   toChunkCoordinates,
   toSlotNumber,
   updateEmaInputSchema,
@@ -228,9 +231,68 @@ describe("公開DTOと本人DTOの秘密境界", () => {
   it("hiddenは個別公開投影でも存在しない扱いにする", () => {
     expect(projectPublicEma({ ...ownerFixture, status: "hidden" })).toBeNull();
   });
+
+  it("一覧とランダムの応答はactive/public投影だけを受け付ける", () => {
+    const listed = projectPublicEma({
+      ...ownerFixture,
+      messageVisibility: "public",
+    });
+    expect(
+      publicEmaListResponseSchema.safeParse({
+        items: [listed],
+        nextCursor: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      publicEmaListResponseSchema.safeParse({
+        items: [{ ...listed, visibility: "unlisted" }],
+        nextCursor: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      randomEmaResponseSchema.safeParse({
+        item: { ...listed, visibility: "unlisted" },
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("チャンク・集計・receiptの整合性", () => {
+  it("集計セルの位置・件数上限・重複をcellSizeごとに検証する", () => {
+    const base = {
+      cellSize: 20 as const,
+      cells: [
+        {
+          x: 0,
+          y: 20,
+          occupiedCount: 400,
+          activeCount: 399,
+          listedCount: 398,
+        },
+      ],
+      asOf: UPDATED_AT,
+    };
+    expect(overviewResponseSchema.safeParse(base).success).toBe(true);
+    expect(
+      overviewResponseSchema.safeParse({
+        ...base,
+        cells: [{ ...base.cells[0], x: 1 }],
+      }).success,
+    ).toBe(false);
+    expect(
+      overviewResponseSchema.safeParse({
+        ...base,
+        cells: [{ ...base.cells[0], occupiedCount: 401 }],
+      }).success,
+    ).toBe(false);
+    expect(
+      overviewResponseSchema.safeParse({
+        ...base,
+        cells: [base.cells[0], base.cells[0]],
+      }).success,
+    ).toBe(false);
+  });
+
   it("チャンク外、unlistedのpublic cell、重複座標を拒否する", () => {
     const publicCell = projectChunkCell({
       ...ownerFixture,

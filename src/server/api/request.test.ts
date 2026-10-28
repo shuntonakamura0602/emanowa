@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertOnlyQueryKeys,
   assertSameOrigin,
   readCreateEmaInput,
   readDeleteEmaInput,
   readIdempotencyKey,
+  readSingleQueryParam,
   readUpdateEmaInput,
 } from "@/server/api/request";
 
@@ -122,5 +124,21 @@ describe("API request boundary", () => {
         ),
       ),
     ).rejects.toThrow();
+  });
+
+  it("rejects unknown or duplicate public exploration query fields", () => {
+    const valid = new URLSearchParams("cx=0&cy=49");
+    expect(() => assertOnlyQueryKeys(valid, ["cx", "cy"])).not.toThrow();
+    expect(readSingleQueryParam(valid, "cx")).toBe("0");
+
+    expect(() =>
+      assertOnlyQueryKeys(new URLSearchParams("cx=0&cy=0&ownerId=forged"), [
+        "cx",
+        "cy",
+      ]),
+    ).toThrow();
+    expect(() =>
+      readSingleQueryParam(new URLSearchParams("cx=0&cx=1"), "cx"),
+    ).toThrow();
   });
 });

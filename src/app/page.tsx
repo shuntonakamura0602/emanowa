@@ -26,7 +26,7 @@ export default function HomePage() {
             </Link>
           </div>
           <p className="fine-print">
-            絵馬の作成と本人管理を実装済みです。Canvas地図と近くへの招待は、後続の段階で追加します。
+            地図・一覧・投稿・本人管理を利用できます。近くへの招待と共有は、後続の段階で追加します。
           </p>
         </div>
         <div className="hero__visual" aria-hidden="true">

@@ -28,7 +28,7 @@ export function ConnectionNotice() {
   const { services } = getPublicRuntimeConfig();
   const connectionMessage =
     services.status === "ready"
-      ? "認証・保存・本人管理を利用できます。Canvas地図は次の段階で実装します。"
+      ? "地図・一覧・投稿・本人管理を利用できます。近くへの招待と共有は後続の段階で追加します。"
       : services.status === "development_demo"
         ? "開発用サンプルが選択されています。本番保存や実際の投稿としては扱いません。"
         : "外部サービスは未接続です。入力画面は確認できますが、保存と本人管理は利用できません。";
@@ -38,7 +38,7 @@ export function ConnectionNotice() {
       <div className="container connection-notice__inner">
         <span className="status-dot" aria-hidden="true" />
         <p>
-          <strong>段階C：絵馬の作成と本人管理。</strong> {connectionMessage}
+          <strong>段階D：地図と探索。</strong> {connectionMessage}
         </p>
       </div>
     </aside>

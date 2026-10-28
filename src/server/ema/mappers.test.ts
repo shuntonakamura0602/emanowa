@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   mapCreateEmaRow,
+  mapListedPublicEmaRow,
   mapMutationEmaRow,
   mapOwnerEmaRow,
   mapOwnerWorldRow,
+  mapPublicChunkRows,
   mapPublicEmaRow,
+  mapPublicOverviewRows,
   mapPublicWorldRow,
 } from "@/server/ema/mappers";
 
@@ -42,6 +45,127 @@ describe("database DTO mappers", () => {
     expect(() =>
       mapPublicEmaRow({ ...publicRow, message_text: SECRET_WISH }),
     ).toThrow();
+  });
+
+  it("rejects unlisted rows from enumerable feed and random projections", () => {
+    expect(() => mapListedPublicEmaRow(publicRow)).toThrow();
+    expect(
+      mapListedPublicEmaRow({ ...publicRow, visibility: "public" }).visibility,
+    ).toBe("public");
+  });
+
+  it("maps an empty overview with the world timestamp and no invented cells", () => {
+    expect(
+      mapPublicOverviewRows(
+        [
+          {
+            meta_world_slug: "2027",
+            meta_as_of: "2026-12-20T00:00:00Z",
+            cell_world_slug: null,
+            cell_size: null,
+            x: null,
+            y: null,
+            occupied_count: null,
+            active_count: null,
+            listed_count: null,
+            cell_as_of: null,
+          },
+        ],
+        20,
+      ),
+    ).toEqual({
+      cellSize: 20,
+      cells: [],
+      asOf: "2026-12-20T00:00:00.000Z",
+    });
+    expect(mapPublicOverviewRows([], 20)).toBeNull();
+  });
+
+  it("validates aggregate cells and maps one-snapshot chunk metadata", () => {
+    expect(
+      mapPublicOverviewRows(
+        [
+          {
+            meta_world_slug: "2027",
+            meta_as_of: "2026-12-20T00:00:01Z",
+            cell_world_slug: "2027",
+            cell_size: 100,
+            x: 0,
+            y: 100,
+            occupied_count: "25",
+            active_count: 24,
+            listed_count: 23n,
+            cell_as_of: "2026-12-20T00:00:00Z",
+          },
+        ],
+        100,
+      )?.cells,
+    ).toEqual([
+      {
+        x: 0,
+        y: 100,
+        occupiedCount: 25,
+        activeCount: 24,
+        listedCount: 23,
+      },
+    ]);
+
+    const chunk = mapPublicChunkRows([
+      {
+        meta_world_slug: "2027",
+        meta_cx: 0,
+        meta_cy: 0,
+        meta_revision: "7",
+        kind: "public",
+        public_id: PUBLIC_ID,
+        cell_world_slug: "2027",
+        x: 2,
+        y: 3,
+        slot_number: 3003,
+        nickname: "えま太郎",
+        category: "health",
+        design_id: "basic_wood",
+        visibility: "public",
+        message_visibility: "owner_only",
+        message_text: null,
+        version: 1,
+        created_at: "2026-12-19T15:00:00Z",
+        updated_at: "2026-12-20T00:00:00Z",
+      },
+    ]);
+    expect(chunk?.revision).toBe(7);
+    expect(JSON.stringify(chunk)).not.toContain(SECRET_WISH);
+  });
+
+  it("keeps occupied cells identifier-free and rejects accidental metadata", () => {
+    const occupied = {
+      meta_world_slug: "2027",
+      meta_cx: 0,
+      meta_cy: 0,
+      meta_revision: 1,
+      kind: "occupied",
+      public_id: null,
+      cell_world_slug: "2027",
+      x: 3,
+      y: 3,
+      slot_number: 3004,
+      nickname: null,
+      category: null,
+      design_id: null,
+      visibility: null,
+      message_visibility: null,
+      message_text: null,
+      version: null,
+      created_at: null,
+      updated_at: null,
+    };
+    expect(mapPublicChunkRows([occupied])?.cells).toEqual([
+      { kind: "occupied", x: 3, y: 3, slotNumber: 3004 },
+    ]);
+    expect(() =>
+      mapPublicChunkRows([{ ...occupied, public_id: PUBLIC_ID }]),
+    ).toThrow();
+    expect(mapPublicChunkRows([])).toBeNull();
   });
 
   it("maps the owner row independently with the secret wish", () => {

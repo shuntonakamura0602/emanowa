@@ -169,3 +169,32 @@ export function parseQueryValue<T>(
   }
   return parsed.data;
 }
+
+export function assertOnlyQueryKeys(
+  query: URLSearchParams,
+  allowedKeys: readonly string[],
+): void {
+  const allowed = new Set(allowedKeys);
+  for (const key of query.keys()) {
+    if (!allowed.has(key)) {
+      throw new ApiRouteError(
+        "INVALID_QUERY",
+        "URLの指定を確認してください。",
+        { fieldErrors: { [key]: "この項目は指定できません" } },
+      );
+    }
+  }
+}
+
+export function readSingleQueryParam(
+  query: URLSearchParams,
+  key: string,
+): string | null {
+  const values = query.getAll(key);
+  if (values.length > 1) {
+    throw new ApiRouteError("INVALID_QUERY", "URLの指定を確認してください。", {
+      fieldErrors: { [key]: "同じ項目を複数指定できません" },
+    });
+  }
+  return values[0] ?? null;
+}

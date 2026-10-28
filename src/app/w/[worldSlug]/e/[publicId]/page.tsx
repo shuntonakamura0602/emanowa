@@ -7,6 +7,7 @@ import {
   StageCard,
   WorldBreadcrumb,
 } from "@/components/site-shell";
+import { worldLocationHref } from "@/components/world/map-contracts";
 import { getWorldConfig } from "@/config/worlds";
 import { publicIdSchema } from "@/domain";
 import { getPublicEma } from "@/server/ema/repository";
@@ -37,7 +38,6 @@ export default async function EmaDetailPage({
   }
   const ema = await getPublicEma(worldSlug, publicId);
   if (!ema) notFound();
-  const safeWorld = encodeURIComponent(worldSlug);
 
   return (
     <section className="container page-section">
@@ -71,15 +71,13 @@ export default async function EmaDetailPage({
 
         <div className="card-grid">
           <StageCard title="できること">
-            <p>
-              接続後は、地図で見る・共有する・近くに掛ける・通報する導線を、現在の公開設定に合わせて表示します。
-            </p>
+            <p>この絵馬が掛かっている場所を地図で確認できます。</p>
             <div className="action-row">
               <Link
                 className="button button--secondary"
-                href={"/w/" + safeWorld}
+                href={worldLocationHref(worldSlug, ema.x, ema.y)}
               >
-                この年の地図へ
+                地図で見る
               </Link>
               <Link className="button button--quiet" href="/me">
                 本人管理画面

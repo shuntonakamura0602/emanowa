@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMPTY_DRAFT,
+  applyInitialSlotNumber,
   canonicalCreatePayload,
   createInputFromDraft,
   draftStorageKey,
+  isExpectedOwnerPublicId,
   isMutationReceipt,
   messageForApiError,
   nearbySlotCandidates,
@@ -86,6 +88,32 @@ describe("段階Cの作成フォーム契約", () => {
     const second = canonicalCreatePayload(parsed.input!);
     expect(first).toBe(second);
     expect(JSON.parse(first)).toMatchObject({ nickname: null, x: 0, y: 0 });
+  });
+
+  it("地図で選び直した場所だけを復元下書きへ反映し、旧送信キーを破棄する", () => {
+    const stored: StoredEmaDraft = {
+      version: 2,
+      authContextEpoch: null,
+      values: { ...EMPTY_DRAFT, wishText: "願い", slotNumber: "1" },
+      idempotencyKey: "123e4567-e89b-42d3-a456-426614174000",
+      idempotencyPayload: "old",
+    };
+    expect(applyInitialSlotNumber(stored, 1)).toBe(stored);
+    expect(applyInitialSlotNumber(stored, 1001)).toEqual({
+      ...stored,
+      values: { ...stored.values, slotNumber: "1001" },
+      idempotencyKey: null,
+      idempotencyPayload: null,
+    });
+  });
+
+  it("編集URLを指定した場合は所有者DTOのpublicIdが一致するときだけ許可する", () => {
+    const owned = "550e8400-e29b-41d4-a716-446655440000";
+    const other = "660e8400-e29b-41d4-a716-446655440000";
+    expect(isExpectedOwnerPublicId(undefined, owned)).toBe(true);
+    expect(isExpectedOwnerPublicId(owned, owned)).toBe(true);
+    expect(isExpectedOwnerPublicId(owned.toUpperCase(), owned)).toBe(true);
+    expect(isExpectedOwnerPublicId(owned, other)).toBe(false);
   });
 
   it("同一タブの保存形式だけを復元し、不正な値は捨てる", () => {

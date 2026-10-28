@@ -131,3 +131,33 @@ staging/productionではCloudflare Turnstileを匿名Authとメール復帰要�
 - 関連仕様: 04 §5・§8.2、07 段階C
 
 `/me/worlds` は検証済みactorだけをDB文脈へ渡し、利用者入力のUIDを受け付けない。cursorは `(updatedAt, publicId)` の型・形式・canonical base64urlを厳格検証し、不正値を400にする。DB関数はlookaheadを含む上限51件とpartial indexを使い、offsetや全件読み込みを避ける。
+
+## ADR-D-001: 公開地図は疎な集計と1チャンクのexecute-only境界にする
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 03 §4・§5・§11、04 §6・§8・§10、07 段階D
+
+1000×1000枠を行やDOMとして全件取得せず、遠景は既存の20×20 `world_chunks` を20または100枠単位へ集約し、近景は20×20の1チャンクだけを返す。概要は最大2,500領域、チャンクは最大400セル、クライアントの1視点は最大16チャンク、同時要求は4本に固定する。上限を超える広い近景は、部分応答を空き枠と誤認させず集計表示へ戻す。
+
+DB境界は段階Bと同じ `app_private` の固定search path・execute-only `SECURITY DEFINER` 関数とする。チャンクのrevisionとセルは同一SQL文の同一スナップショットで読み、`unlisted` と `hidden` は `{kind:'occupied',x,y,slotNumber}` 以外を返さない。`owner_only` の本文は公開投影でNULLのままにする。通常のチャンク・一覧・ランダム応答は `no-store`、本文・名前・IDを持たないoverviewだけ共有キャッシュを最大30秒許可する。
+
+## ADR-D-002: Canvasの一時状態と公開データ取得をReactの画面状態から分離する
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 02 §3・§9、03 §3・§4・§11、04 §10、07 OPS-09
+
+高頻度なカメラ・pointer・描画状態はrefと `requestAnimationFrame` に置き、確定時だけReact state、sessionStorage、`history.replaceState`へ反映する。devicePixelRatioは最大2、タップとドラッグは6 CSS pxで分け、縮尺に応じて100枠集計、20枠集計、個別形状、公開本文へ切り替える。Canvasを使えない場合にも、HTMLの一覧・番号入力・作成入口・自分の絵馬への移動を残す。
+
+公開GETは `credentials:'omit'` とし、200msの確定待ち、AbortController、要求世代で古い範囲の遅着を破棄する。チャンクと一覧の保持量には上限を設け、タブ非表示中は描画・取得を止め、復帰時は本文を含み得る公開キャッシュを破棄して再取得する。本人位置だけは段階CのWeb Lockと認証epochを再利用し、OwnerEmaを公開地図キャッシュへ混ぜない。
+
+## ADR-D-003: 公開探索は精度を保つkeysetと索引付きUUID pivotに限定する
+
+- 状態: 採用
+- 日付: 2026-10-28
+- 関連仕様: 03 §7、04 §8.2・§10、07 ACCESS-05・OPS-09
+
+新着一覧は `(created_at DESC, public_id DESC)` のkeysetとし、cursorにversion、world、category、order、DB精度の作成日時、public IDをcanonical base64urlで保持する。署名は用いないが、未知キー、形式、再符号化、world/category不一致を厳格検証し、最大50件とlookaheadだけを取得する。クライアントはpublic IDで重複除去しつつ、保持件数を制限する。
+
+ランダム訪問は全件 `ORDER BY random()` や巨大OFFSETを使わない。ランダムなUUID pivot以降の先頭1件を索引で探し、なければ先頭へ1回だけ折り返す。category有無のSQL経路を分け、`visibility='public'` のworld索引・category索引に一致させる。対象なしは200の `{item:null}` とし、`unlisted` と `hidden` は候補にしない。

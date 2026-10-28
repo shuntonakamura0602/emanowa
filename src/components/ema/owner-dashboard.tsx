@@ -46,11 +46,13 @@ import { EmaPreview } from "./ema-preview";
 import {
   CATEGORY_OPTIONS,
   isApiError,
+  isExpectedOwnerPublicId,
   isMutationReceipt,
   messageForApiError,
 } from "./ui-contracts";
 
-type LoadState = "loading" | "ready" | "auth_required" | "error" | "deleted";
+type LoadState =
+  "loading" | "ready" | "auth_required" | "not_owned" | "error" | "deleted";
 type MutationState = "idle" | "saving" | "unknown";
 type AuthReconciliationOutcome =
   "cancelled" | "link_succeeded" | "remote_link_settled";
@@ -97,10 +99,12 @@ function canonicalMutationPayload(input: object): string {
 
 export function OwnerDashboard({
   worldSlug,
+  expectedPublicId,
   captchaSiteKey,
   captchaRequired,
 }: {
   worldSlug: string;
+  expectedPublicId?: string;
   captchaSiteKey: string | null;
   captchaRequired: boolean;
 }) {
@@ -144,6 +148,8 @@ export function OwnerDashboard({
   const formLocked = mutationState === "saving" || mutationState === "unknown";
   const wishCount = countGraphemes(form.wishText);
   const nicknameCount = countGraphemes(form.nickname);
+  const emaMatchesExpectedPublicId =
+    ema !== null && isExpectedOwnerPublicId(expectedPublicId, ema.publicId);
 
   const loadOwner = useCallback(
     async (
@@ -244,7 +250,7 @@ export function OwnerDashboard({
             ? (body as { ema: unknown }).ema
             : undefined;
         if (candidate === null) {
-          setLoadState("ready");
+          setLoadState(expectedPublicId ? "not_owned" : "ready");
           discardUnverifiedPrivateState();
           return null;
         }
@@ -253,6 +259,11 @@ export function OwnerDashboard({
           setLoadState("error");
           if (options.afterRecovery) discardUnverifiedPrivateState();
           setMessage("自分の絵馬の応答を確認できませんでした。");
+          return null;
+        }
+        if (!isExpectedOwnerPublicId(expectedPublicId, parsed.data.publicId)) {
+          discardUnverifiedPrivateState();
+          setLoadState("not_owned");
           return null;
         }
         const sameOwner =
@@ -312,7 +323,13 @@ export function OwnerDashboard({
         operation.finish();
       }
     },
-    [authBoundRequests, setCurrentEma, setMutationState, worldSlug],
+    [
+      authBoundRequests,
+      expectedPublicId,
+      setCurrentEma,
+      setMutationState,
+      worldSlug,
+    ],
   );
 
   const markAuthTransitionPending = useCallback((): void => {
@@ -542,12 +559,28 @@ export function OwnerDashboard({
       if (response.ok && candidate === null) {
         setCurrentEma(null);
         setForm(EMPTY_OWNER_FORM);
-        setLoadState("ready");
+        setConflictEma(null);
+        setPendingMutation(null);
+        setMutationState("idle");
+        setFieldErrors({});
+        setLoadState(expectedPublicId ? "not_owned" : "ready");
         setMessage("別の画面でこの絵馬が削除されました。");
         return;
       }
       const parsed = ownerEmaSchema.safeParse(candidate);
-      if (parsed.success) setConflictEma(parsed.data);
+      if (parsed.success) {
+        if (!isExpectedOwnerPublicId(expectedPublicId, parsed.data.publicId)) {
+          setCurrentEma(null);
+          setForm(EMPTY_OWNER_FORM);
+          setConflictEma(null);
+          setPendingMutation(null);
+          setMutationState("idle");
+          setFieldErrors({});
+          setLoadState("not_owned");
+          return;
+        }
+        setConflictEma(parsed.data);
+      }
     } catch {
       // The conflict message remains useful even when the comparison fetch fails.
     } finally {
@@ -936,6 +969,24 @@ export function OwnerDashboard({
           </div>
         ) : null}
 
+        {loadState === "not_owned" ||
+        (loadState === "ready" &&
+          expectedPublicId !== undefined &&
+          !emaMatchesExpectedPublicId) ? (
+          <div className="state-panel" role="status">
+            <h3>この絵馬を編集できません</h3>
+            <p>
+              このURLの絵馬と、現在確認できる本人情報が一致しません。別の利用者の内容は表示していません。
+            </p>
+            <p className="fine-print">
+              以前に設定したメールから本人情報を復元するか、自分の絵馬の管理画面を確認してください。
+            </p>
+            <Link className="button button--secondary" href="/me">
+              自分の絵馬を確認する
+            </Link>
+          </div>
+        ) : null}
+
         {loadState === "deleted" ? (
           <div className="state-panel" aria-live="polite">
             <h3>絵馬を削除しました</h3>
@@ -949,7 +1000,7 @@ export function OwnerDashboard({
           </div>
         ) : null}
 
-        {loadState === "ready" && !ema ? (
+        {loadState === "ready" && expectedPublicId === undefined && !ema ? (
           <div className="state-panel">
             <h3>この年の絵馬はまだありません</h3>
             <p>願いを書くと、この端末から編集や削除ができます。</p>
@@ -962,7 +1013,7 @@ export function OwnerDashboard({
           </div>
         ) : null}
 
-        {loadState === "ready" && ema ? (
+        {loadState === "ready" && ema && emaMatchesExpectedPublicId ? (
           <>
             {ema.status === "hidden" ? (
               <div className="form-message form-message--error" role="status">

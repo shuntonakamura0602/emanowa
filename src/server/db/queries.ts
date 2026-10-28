@@ -1,6 +1,12 @@
 import type { QueryResultRow } from "pg";
 
-import type { CreateEmaInput, DeleteEmaInput, UpdateEmaInput } from "@/domain";
+import type {
+  Category,
+  CreateEmaInput,
+  DeleteEmaInput,
+  OverviewCellSize,
+  UpdateEmaInput,
+} from "@/domain";
 import type { DatabaseClient } from "@/server/db/types";
 
 type DatabaseTimestamp = Date | string;
@@ -37,6 +43,74 @@ export interface PublicEmaRow extends QueryResultRow {
   version: number;
   created_at: DatabaseTimestamp;
   updated_at: DatabaseTimestamp;
+}
+
+export interface PublicEmaFeedRow extends PublicEmaRow {
+  cursor_created_at: string;
+}
+
+export interface PublicOverviewRow extends QueryResultRow {
+  world_slug: string;
+  cell_size: number;
+  x: number;
+  y: number;
+  occupied_count: DatabaseCount;
+  active_count: DatabaseCount;
+  listed_count: DatabaseCount;
+  as_of: DatabaseTimestamp;
+}
+
+export interface PublicOverviewJoinedRow extends QueryResultRow {
+  meta_world_slug: string;
+  meta_as_of: DatabaseTimestamp;
+  cell_world_slug: string | null;
+  cell_size: number | null;
+  x: number | null;
+  y: number | null;
+  occupied_count: DatabaseCount | null;
+  active_count: DatabaseCount | null;
+  listed_count: DatabaseCount | null;
+  cell_as_of: DatabaseTimestamp | null;
+}
+
+export interface PublicChunkCellRow extends QueryResultRow {
+  kind: string;
+  public_id: string | null;
+  world_slug: string | null;
+  x: number;
+  y: number;
+  slot_number: number;
+  nickname: string | null;
+  category: string | null;
+  design_id: string | null;
+  visibility: string | null;
+  message_visibility: string | null;
+  message_text: string | null;
+  version: number | null;
+  created_at: DatabaseTimestamp | null;
+  updated_at: DatabaseTimestamp | null;
+}
+
+export interface PublicChunkJoinedRow extends QueryResultRow {
+  meta_world_slug: string;
+  meta_cx: number;
+  meta_cy: number;
+  meta_revision: DatabaseCount;
+  kind: string | null;
+  public_id: string | null;
+  cell_world_slug: string | null;
+  x: number | null;
+  y: number | null;
+  slot_number: number | null;
+  nickname: string | null;
+  category: string | null;
+  design_id: string | null;
+  visibility: string | null;
+  message_visibility: string | null;
+  message_text: string | null;
+  version: number | null;
+  created_at: DatabaseTimestamp | null;
+  updated_at: DatabaseTimestamp | null;
 }
 
 export interface OwnerEmaRow extends QueryResultRow {
@@ -105,6 +179,113 @@ export async function queryPublicEma(
   const result = await client.query<PublicEmaRow>(
     "select * from app_private.get_public_ema($1::text, $2::uuid)",
     [worldSlug, publicId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function queryPublicOverview(
+  client: DatabaseClient,
+  worldSlug: string,
+  cellSize: OverviewCellSize,
+): Promise<PublicOverviewJoinedRow[]> {
+  const result = await client.query<PublicOverviewJoinedRow>(
+    `select
+       world_result.world_slug as meta_world_slug,
+       world_result.stats_as_of as meta_as_of,
+       overview.world_slug as cell_world_slug,
+       overview.cell_size,
+       overview.x,
+       overview.y,
+       overview.occupied_count,
+       overview.active_count,
+       overview.listed_count,
+       overview.as_of as cell_as_of
+     from app_private.get_public_world($1::text) as world_result
+     left join lateral app_private.get_public_overview(
+       $1::text, $2::integer
+     ) as overview on true
+     order by overview.y nulls first, overview.x nulls first`,
+    [worldSlug, cellSize],
+  );
+  return result.rows;
+}
+
+export async function queryPublicChunk(
+  client: DatabaseClient,
+  worldSlug: string,
+  cx: number,
+  cy: number,
+): Promise<PublicChunkJoinedRow[]> {
+  const result = await client.query<PublicChunkJoinedRow>(
+    `select
+       meta.world_slug as meta_world_slug,
+       meta.cx as meta_cx,
+       meta.cy as meta_cy,
+       meta.revision as meta_revision,
+       cell.kind,
+       cell.public_id,
+       cell.world_slug as cell_world_slug,
+       cell.x,
+       cell.y,
+       cell.slot_number,
+       cell.nickname,
+       cell.category,
+       cell.design_id,
+       cell.visibility,
+       cell.message_visibility,
+       cell.message_text,
+       cell.version,
+       cell.created_at,
+       cell.updated_at
+     from app_private.get_public_chunk_meta(
+       $1::text, $2::integer, $3::integer
+     ) as meta
+     left join lateral app_private.get_public_chunk(
+       $1::text, $2::integer, $3::integer
+     ) as cell on true
+     order by cell.y nulls first, cell.x nulls first`,
+    [worldSlug, cx, cy],
+  );
+  return result.rows;
+}
+
+export async function queryPublicEmaFeed(
+  client: DatabaseClient,
+  worldSlug: string,
+  limit: number,
+  category: Category | null,
+  cursor: { createdAt: string; publicId: string } | null,
+): Promise<PublicEmaFeedRow[]> {
+  const result = await client.query<PublicEmaFeedRow>(
+    `select
+       feed.*,
+       pg_catalog.to_char(
+         feed.created_at at time zone 'UTC',
+         'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+       ) as cursor_created_at
+     from app_private.list_public_emas(
+       $1::text, $2::integer, $3::text, $4::timestamptz, $5::uuid
+     ) as feed`,
+    [
+      worldSlug,
+      limit,
+      category,
+      cursor?.createdAt ?? null,
+      cursor?.publicId ?? null,
+    ],
+  );
+  return result.rows;
+}
+
+export async function queryRandomPublicEma(
+  client: DatabaseClient,
+  worldSlug: string,
+  category: Category | null,
+  pivot: string,
+): Promise<PublicEmaRow | null> {
+  const result = await client.query<PublicEmaRow>(
+    "select * from app_private.get_random_public_ema($1::text, $2::text, $3::uuid)",
+    [worldSlug, category, pivot],
   );
   return result.rows[0] ?? null;
 }

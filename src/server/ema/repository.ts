@@ -1,16 +1,23 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+
+import { z } from "zod";
 
 import {
+  categorySchema,
+  chunkCoordinatesSchema,
   createEmaInputSchema,
   deleteEmaInputSchema,
   idempotencyKeySchema,
+  overviewCellSizeSchema,
   publicIdSchema,
   updateEmaInputSchema,
   worldSlugSchema,
+  type Category,
   type CreateEmaInput,
   type DeleteEmaInput,
+  type OverviewCellSize,
   type UpdateEmaInput,
 } from "@/domain";
 import { getServerRuntimeConfig } from "@/server/config";
@@ -19,20 +26,29 @@ import {
   queryDeleteEma,
   queryOwnerEma,
   queryOwnerWorlds,
+  queryPublicChunk,
   queryPublicEma,
+  queryPublicEmaFeed,
+  queryPublicOverview,
   queryPublicWorld,
+  queryRandomPublicEma,
   queryUpdateEma,
 } from "@/server/db/queries";
 import { withDatabaseTransaction } from "@/server/db/transaction";
 import { actorIdSchema } from "@/server/db/validation";
 import {
   mapCreateEmaRow,
+  mapListedPublicEmaRow,
   mapMutationEmaRow,
   mapOwnerEmaRow,
   mapOwnerWorldRow,
+  mapPublicChunkRows,
   mapPublicEmaRow,
+  mapPublicOverviewRows,
   mapPublicWorldRow,
 } from "@/server/ema/mappers";
+
+const publicFeedLimitSchema = z.number().int().min(1).max(50);
 
 function createRequestHash(worldSlug: string, input: CreateEmaInput): Buffer {
   const canonicalRequest = JSON.stringify({
@@ -111,6 +127,96 @@ export async function getPublicEma(
     (client) => queryPublicEma(client, worldSlug, publicId),
   );
   return row ? mapPublicEmaRow(row) : null;
+}
+
+export async function getPublicOverview(
+  worldSlugInput: string,
+  cellSizeInput: unknown,
+) {
+  const worldSlug = worldSlugSchema.parse(worldSlugInput);
+  const cellSize: OverviewCellSize =
+    overviewCellSizeSchema.parse(cellSizeInput);
+  const rows = await withDatabaseTransaction({ actorId: null }, (client) =>
+    queryPublicOverview(client, worldSlug, cellSize),
+  );
+  return mapPublicOverviewRows(rows, cellSize);
+}
+
+export async function getPublicChunk(
+  worldSlugInput: string,
+  chunkInput: unknown,
+) {
+  const worldSlug = worldSlugSchema.parse(worldSlugInput);
+  const chunk = chunkCoordinatesSchema.parse(chunkInput);
+  const rows = await withDatabaseTransaction({ actorId: null }, (client) =>
+    queryPublicChunk(client, worldSlug, chunk.cx, chunk.cy),
+  );
+  return mapPublicChunkRows(rows);
+}
+
+function parseCategory(value: unknown): Category | null {
+  return value === null ? null : categorySchema.parse(value);
+}
+
+export async function listPublicEmas(
+  worldSlugInput: string,
+  limitInput: unknown,
+  categoryInput: unknown,
+  cursor: { createdAt: string; publicId: string } | null,
+) {
+  const worldSlug = worldSlugSchema.parse(worldSlugInput);
+  const limit = publicFeedLimitSchema.parse(limitInput);
+  const category = parseCategory(categoryInput);
+
+  return withDatabaseTransaction({ actorId: null }, async (client) => {
+    const world = await queryPublicWorld(client, worldSlug);
+    if (!world) return null;
+
+    const rows = await queryPublicEmaFeed(
+      client,
+      worldSlug,
+      limit,
+      category,
+      cursor,
+    );
+    const items = rows.map(mapListedPublicEmaRow);
+    const lastRow = rows.at(-1);
+    if (!lastRow || items.length < limit) {
+      return { items, next: null };
+    }
+
+    const next = {
+      createdAt: lastRow.cursor_created_at,
+      publicId: lastRow.public_id,
+    };
+    const probe = await queryPublicEmaFeed(
+      client,
+      worldSlug,
+      1,
+      category,
+      next,
+    );
+    return { items, next: probe.length > 0 ? next : null };
+  });
+}
+
+export async function getRandomPublicEma(
+  worldSlugInput: string,
+  categoryInput: unknown,
+) {
+  const worldSlug = worldSlugSchema.parse(worldSlugInput);
+  const category = parseCategory(categoryInput);
+  return withDatabaseTransaction({ actorId: null }, async (client) => {
+    const world = await queryPublicWorld(client, worldSlug);
+    if (!world) return undefined;
+    const row = await queryRandomPublicEma(
+      client,
+      worldSlug,
+      category,
+      randomUUID(),
+    );
+    return row ? mapListedPublicEmaRow(row) : null;
+  });
 }
 
 export async function getOwnerEma(

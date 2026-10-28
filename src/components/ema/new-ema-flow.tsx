@@ -25,6 +25,7 @@ import {
 import {
   CATEGORY_OPTIONS,
   EMPTY_DRAFT,
+  applyInitialSlotNumber,
   canonicalCreatePayload,
   createInputFromDraft,
   draftStorageKey,
@@ -44,11 +45,17 @@ type Step = "write" | "confirm" | "success";
 type SubmitState = "idle" | "saving" | "error" | "unknown";
 type AuthState = "idle" | "checking" | "ready" | "error";
 
-function emptyStoredDraft(authContextEpoch: string | null): StoredEmaDraft {
+function emptyStoredDraft(
+  authContextEpoch: string | null,
+  initialSlotNumber: number | null = null,
+): StoredEmaDraft {
   return {
     version: 2,
     authContextEpoch,
-    values: EMPTY_DRAFT,
+    values:
+      initialSlotNumber === null
+        ? EMPTY_DRAFT
+        : { ...EMPTY_DRAFT, slotNumber: String(initialSlotNumber) },
     idempotencyKey: null,
     idempotencyPayload: null,
   };
@@ -71,14 +78,20 @@ export function NewEmaFlow({
   worldSlug,
   captchaSiteKey,
   captchaRequired,
+  initialSlotNumber = null,
 }: {
   worldSlug: string;
   captchaSiteKey: string | null;
   captchaRequired: boolean;
+  initialSlotNumber?: number | null;
 }) {
-  const [draft, setDraft] = useState<EmaDraft>(EMPTY_DRAFT);
+  const [draft, setDraft] = useState<EmaDraft>(() =>
+    initialSlotNumber === null
+      ? EMPTY_DRAFT
+      : { ...EMPTY_DRAFT, slotNumber: String(initialSlotNumber) },
+  );
   const [stored, setStored] = useState<StoredEmaDraft>(() =>
-    emptyStoredDraft(null),
+    emptyStoredDraft(null, initialSlotNumber),
   );
   const [draftReady, setDraftReady] = useState(false);
   const [step, setStep] = useState<Step>("write");
@@ -129,16 +142,19 @@ export function NewEmaFlow({
         authContextEpoch,
       );
       if (restored) {
-        setDraft(restored.values);
-        setStored(restored);
+        const located = applyInitialSlotNumber(restored, initialSlotNumber);
+        setDraft(located.values);
+        setStored(located);
       } else {
         removeStoredDraft(sessionStorage, storageKey);
-        setStored(emptyStoredDraft(authContextEpoch));
+        const initial = emptyStoredDraft(authContextEpoch, initialSlotNumber);
+        setDraft(initial.values);
+        setStored(initial);
       }
       setDraftReady(true);
     });
     return () => cancelAnimationFrame(frame);
-  }, [storageKey]);
+  }, [initialSlotNumber, storageKey]);
 
   useEffect(
     () =>
@@ -165,8 +181,9 @@ export function NewEmaFlow({
             change.epoch,
           );
           if (restored) {
-            setDraft(restored.values);
-            setStored(restored);
+            const located = applyInitialSlotNumber(restored, initialSlotNumber);
+            setDraft(located.values);
+            setStored(located);
           }
           setGlobalMessage(
             "別のタブの本人情報変更は完了しませんでした。下書きを保持しています。",
@@ -187,7 +204,7 @@ export function NewEmaFlow({
         );
         removeStoredDraft(sessionStorage, storageKey);
       }),
-    [storageKey],
+    [initialSlotNumber, storageKey],
   );
 
   useEffect(() => {

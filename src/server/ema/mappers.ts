@@ -1,11 +1,19 @@
 import type { PublicCapabilities } from "@/config/public";
 import {
+  chunkResponseSchema,
   mutationReceiptSchema,
+  occupiedChunkCellSchema,
+  overviewResponseSchema,
   ownerWorldSummarySchema,
   ownerEmaSchema,
+  publicChunkCellSchema,
   publicEmaSchema,
   worldResponseSchema,
+  type ChunkCell,
+  type ChunkResponse,
   type MutationReceipt,
+  type OverviewCellSize,
+  type OverviewResponse,
   type OwnerEma,
   type OwnerWorldSummary,
   type PublicEma,
@@ -16,7 +24,10 @@ import type {
   MutationEmaRow,
   OwnerEmaRow,
   OwnerWorldRow,
+  PublicChunkCellRow,
+  PublicChunkJoinedRow,
   PublicEmaRow,
+  PublicOverviewJoinedRow,
   PublicWorldRow,
 } from "@/server/db/queries";
 
@@ -76,6 +87,200 @@ export function mapPublicEmaRow(row: PublicEmaRow): PublicEma {
     version: row.version,
     createdAt: isoTimestamp(row.created_at),
     updatedAt: isoTimestamp(row.updated_at),
+  });
+}
+
+export function mapListedPublicEmaRow(row: PublicEmaRow): PublicEma {
+  const ema = mapPublicEmaRow(row);
+  if (ema.visibility !== "public") {
+    throw new Error("enumeration returned an unlisted ema");
+  }
+  return ema;
+}
+
+export function mapPublicOverviewRows(
+  rows: PublicOverviewJoinedRow[],
+  cellSize: OverviewCellSize,
+): OverviewResponse | null {
+  const first = rows[0];
+  if (!first) return null;
+
+  return overviewResponseSchema.parse({
+    cellSize,
+    cells: rows.flatMap((row, index) => {
+      if (row.cell_size === null) {
+        if (
+          rows.length !== 1 ||
+          row.cell_world_slug !== null ||
+          row.x !== null ||
+          row.y !== null ||
+          row.occupied_count !== null ||
+          row.active_count !== null ||
+          row.listed_count !== null ||
+          row.cell_as_of !== null
+        ) {
+          throw new Error("overview returned a partial empty cell");
+        }
+        return [];
+      }
+      if (
+        row.meta_world_slug !== first.meta_world_slug ||
+        row.cell_world_slug !== first.meta_world_slug ||
+        row.cell_size !== cellSize ||
+        row.x === null ||
+        row.y === null ||
+        row.occupied_count === null ||
+        row.active_count === null ||
+        row.listed_count === null ||
+        row.cell_as_of === null
+      ) {
+        throw new Error(`overview cell ${index} does not match its metadata`);
+      }
+      return [
+        {
+          x: row.x,
+          y: row.y,
+          occupiedCount: safeCount(row.occupied_count),
+          activeCount: safeCount(row.active_count),
+          listedCount: safeCount(row.listed_count),
+        },
+      ];
+    }),
+    asOf: isoTimestamp(first.meta_as_of),
+  });
+}
+
+function requirePublicChunkProjection(row: PublicChunkCellRow): PublicEmaRow {
+  if (
+    row.public_id === null ||
+    row.world_slug === null ||
+    row.category === null ||
+    row.design_id === null ||
+    row.visibility === null ||
+    row.message_visibility === null ||
+    row.version === null ||
+    row.created_at === null ||
+    row.updated_at === null
+  ) {
+    throw new Error("public chunk cell is missing its fixed projection");
+  }
+  return {
+    public_id: row.public_id,
+    world_slug: row.world_slug,
+    x: row.x,
+    y: row.y,
+    slot_number: row.slot_number,
+    nickname: row.nickname,
+    category: row.category,
+    design_id: row.design_id,
+    visibility: row.visibility,
+    message_visibility: row.message_visibility,
+    message_text: row.message_text,
+    version: row.version,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function mapPublicChunkCellRow(row: PublicChunkCellRow): ChunkCell {
+  if (row.kind === "public") {
+    return publicChunkCellSchema.parse({
+      kind: "public",
+      ema: mapPublicEmaRow(requirePublicChunkProjection(row)),
+    });
+  }
+  if (row.kind !== "occupied") {
+    throw new Error("database returned an unknown chunk cell kind");
+  }
+  if (
+    row.public_id !== null ||
+    row.nickname !== null ||
+    row.category !== null ||
+    row.design_id !== null ||
+    row.visibility !== null ||
+    row.message_visibility !== null ||
+    row.message_text !== null ||
+    row.version !== null ||
+    row.created_at !== null ||
+    row.updated_at !== null
+  ) {
+    throw new Error("occupied chunk cell contained discoverable ema data");
+  }
+  return occupiedChunkCellSchema.parse({
+    kind: "occupied",
+    x: row.x,
+    y: row.y,
+    slotNumber: row.slot_number,
+  });
+}
+
+export function mapPublicChunkRows(
+  rows: PublicChunkJoinedRow[],
+): ChunkResponse | null {
+  const first = rows[0];
+  if (!first) return null;
+
+  const cells = rows.flatMap((row, index) => {
+    if (row.kind === null) {
+      if (
+        rows.length !== 1 ||
+        row.public_id !== null ||
+        row.cell_world_slug !== null ||
+        row.x !== null ||
+        row.y !== null ||
+        row.slot_number !== null ||
+        row.nickname !== null ||
+        row.category !== null ||
+        row.design_id !== null ||
+        row.visibility !== null ||
+        row.message_visibility !== null ||
+        row.message_text !== null ||
+        row.version !== null ||
+        row.created_at !== null ||
+        row.updated_at !== null
+      ) {
+        throw new Error("chunk returned a partial empty cell");
+      }
+      return [];
+    }
+    if (
+      row.meta_world_slug !== first.meta_world_slug ||
+      row.meta_cx !== first.meta_cx ||
+      row.meta_cy !== first.meta_cy ||
+      row.cell_world_slug !== first.meta_world_slug ||
+      row.x === null ||
+      row.y === null ||
+      row.slot_number === null
+    ) {
+      throw new Error(`chunk cell ${index} does not match its metadata`);
+    }
+    return [
+      mapPublicChunkCellRow({
+        kind: row.kind,
+        public_id: row.public_id,
+        world_slug: row.cell_world_slug,
+        x: row.x,
+        y: row.y,
+        slot_number: row.slot_number,
+        nickname: row.nickname,
+        category: row.category,
+        design_id: row.design_id,
+        visibility: row.visibility,
+        message_visibility: row.message_visibility,
+        message_text: row.message_text,
+        version: row.version,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }),
+    ];
+  });
+
+  return chunkResponseSchema.parse({
+    worldSlug: first.meta_world_slug,
+    cx: first.meta_cx,
+    cy: first.meta_cy,
+    revision: safeCount(first.meta_revision),
+    cells,
   });
 }
 

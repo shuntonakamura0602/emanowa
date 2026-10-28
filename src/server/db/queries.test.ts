@@ -6,8 +6,12 @@ import {
   queryDeleteEma,
   queryOwnerEma,
   queryOwnerWorlds,
+  queryPublicChunk,
   queryPublicEma,
+  queryPublicEmaFeed,
+  queryPublicOverview,
   queryPublicWorld,
+  queryRandomPublicEma,
   queryUpdateEma,
 } from "@/server/db/queries";
 import type { DatabaseClient } from "@/server/db/types";
@@ -45,6 +49,10 @@ describe("private database function queries", () => {
     await queryPublicEma(database.client, "2027", PUBLIC_ID);
     await queryOwnerEma(database.client, "2027");
     await queryOwnerWorlds(database.client, 13, null);
+    await queryPublicOverview(database.client, "2027", 20);
+    await queryPublicChunk(database.client, "2027", 0, 49);
+    await queryPublicEmaFeed(database.client, "2027", 24, "health", null);
+    await queryRandomPublicEma(database.client, "2027", "study", PUBLIC_ID);
 
     expect(database.query.mock.calls[0]).toEqual([
       expect.stringContaining("app_private.get_public_world($1::text)"),
@@ -62,6 +70,69 @@ describe("private database function queries", () => {
       expect.stringContaining("app_private.list_owner_worlds("),
       [13, null, null],
     ]);
+    expect(database.query.mock.calls[4]).toEqual([
+      expect.stringContaining("app_private.get_public_overview("),
+      ["2027", 20],
+    ]);
+    expect(database.query.mock.calls[5]).toEqual([
+      expect.stringMatching(
+        /get_public_chunk_meta[\s\S]+left join lateral app_private\.get_public_chunk/u,
+      ),
+      ["2027", 0, 49],
+    ]);
+    expect(database.query.mock.calls[6]).toEqual([
+      expect.stringContaining("app_private.list_public_emas("),
+      ["2027", 24, "health", null, null],
+    ]);
+    expect(database.query.mock.calls[7]).toEqual([
+      expect.stringContaining("app_private.get_random_public_ema("),
+      ["2027", "study", PUBLIC_ID],
+    ]);
+  });
+
+  it("reads chunk metadata and cells in one SQL statement and one snapshot", async () => {
+    const database = recordingClient();
+    await queryPublicChunk(database.client, "2027", 12, 34);
+    expect(database.query).toHaveBeenCalledTimes(1);
+    const [sql, values] = database.query.mock.calls[0] ?? [];
+    expect(sql).toContain("get_public_chunk_meta(");
+    expect(sql).toContain("left join lateral app_private.get_public_chunk(");
+    expect(
+      sql.match(/app_private\.get_public_chunk(?:_meta)?\(/gu),
+    ).toHaveLength(2);
+    expect(values).toEqual(["2027", 12, 34]);
+  });
+
+  it("returns a microsecond-precise feed cursor boundary separate from the DTO timestamp", async () => {
+    const database = recordingClient([
+      {
+        public_id: PUBLIC_ID,
+        world_slug: "2027",
+        x: 0,
+        y: 0,
+        slot_number: 1,
+        nickname: null,
+        category: "other",
+        design_id: "basic_wood",
+        visibility: "public",
+        message_visibility: "owner_only",
+        message_text: null,
+        version: 1,
+        created_at: new Date("2026-12-20T00:00:00.123Z"),
+        updated_at: new Date("2026-12-20T00:00:00.123Z"),
+        cursor_created_at: "2026-12-20T00:00:00.123456Z",
+      },
+    ]);
+
+    const rows = await queryPublicEmaFeed(
+      database.client,
+      "2027",
+      1,
+      null,
+      null,
+    );
+    expect(rows[0]?.cursor_created_at).toBe("2026-12-20T00:00:00.123456Z");
+    expect(database.query.mock.calls[0]?.[0]).toContain("as cursor_created_at");
   });
 
   it("passes the exact create function contract without an owner argument", async () => {

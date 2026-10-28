@@ -142,3 +142,52 @@ DB migration / 設定変更:
 
 次に実装する段階:
 : 段階D「地図と探索」。Canvasの移動・ズーム、疎なチャンク取得、集計表示、一覧代替、番号移動、ランダム訪問、自分の絵馬への移動を、公開範囲を維持したまま実装する。
+
+## 段階D — 地図と探索
+
+対象段階:
+: P0 段階D「地図と探索」（実装・ローカルDB/Auth/HTTP統合検証完了）
+
+実装した体験:
+: `/w/{worldSlug}` をCanvas地図へ接続した。マウスドラッグ、タッチのパン・ピンチ、ホイール、拡大縮小ボタン、全体表示、中心復帰、位置URL、DPR最大2の描画に対応する。カメラは `centerX` / `centerY` / `cellPx` を持ち、URL、直前のsessionStorage、公開絵馬が集まり空きもある集計領域、中央の順に初期位置を決める。6 CSS px以内をタップとし、空き、公開絵馬、識別子を持たない占有、未取得を区別する。
+
+: 縮尺に応じて100×100集計、20×20集計、個別の絵馬形状、公開可能な本文へ切り替える。可視範囲と最大1チャンクの先読みを最大16チャンク、同時4要求、200ms待ちで取得し、広すぎる近景は集計へ戻す。要求世代とAbortControllerで古い応答を破棄し、非表示タブでは描画・取得を止める。復帰時は公開キャッシュを破棄して再取得し、チャンクと一覧の保持量も制限する。未取得・失敗した範囲は空きと扱わない。
+
+: 公開一覧はAPI既定24・最大50件の新着keysetページング、カテゴリー絞込み、ランダム訪問を実装した。UIは24件ずつページを置き換えて任意の深さまで進み、現在ページのcursorを30秒間隔で再取得するため、全件をDOMやメモリへ蓄積しない。表示番号からの移動、一覧から地図への移動、所有者用APIをWeb Lockと認証epoch内で読む「自分の絵馬」、矢印/Shift+矢印、`+` / `-`、Enter、Escapeを用意した。Canvas外のHTMLに選択番号と操作を表示し、Canvasが使えない場合も一覧から閲覧・作成へ進める。
+
+: 地図で確認済みの空き枠から作成画面へ `x` / `y` を渡し、既存の本文・設定を保ったまま選んだ場所を作成フローへ反映する。この時点では予約せず、段階B/Cの原子的な確定処理で同一枠・同一所有者の競合を再検証する。
+
+: 公開詳細から「地図で見る」を選ぶと作品座標の `z=80` へ移動する。編集URLはqueryの期待public IDと本人APIから取得したOwnerEmaのpublic IDが一致する場合だけ編集画面を表示し、別作品・所有者切替・古いURLでは本人原文を表示しない。
+
+主な変更ファイル:
+: `supabase/migrations/20261028101056_stage_d_map_exploration.sql`、`supabase/tests/database/stage_d_map_exploration.test.sql`、`src/app/api/v1/worlds/[slug]/overview/`、`chunks/`、`emas/`、`src/components/world/`、`src/domain/`、`src/server/api/public-ema-cursor.ts`、`src/server/db/queries.ts`、`src/server/ema/`、`scripts/stage-d-integration.mjs`、`docs/stage-d-setup.md`
+
+DB migration / 設定変更:
+: 20/100枠の公開概要、チャンクmetadata、索引付きランダム探索のexecute-only関数を追加した。チャンクmetadataとセルの関数を `STABLE` とし、同じ呼出しSQL文のスナップショットでrevisionと全セルを返す。占有チャンクの式索引、公開UUID pivot索引、カテゴリー付き公開UUID pivot索引を追加し、通常BFF roleだけへ固定関数のEXECUTEを許可した。公開詳細用のlookup文脈や所有者情報を引数にせず、RLS・NOBYPASSRLS・Data API非公開の境界を維持する。
+
+: 外部環境変数や新しい外部サービスは追加していない。cloudでは既存のmigration接続で段階D migrationを適用し、通常APIは引き続きtransaction poolerの `emanowa_app` だけを使う。overviewを除く公開応答は `no-store`、overviewは内容なし統計として `s-maxage=30` 以下に限定する。
+
+検証した経路と結果:
+: 純粋関数とDTOの試験に、カメラ変換、縮尺、チャンク上限、場所URL、保存カメラ、初期領域、公開一覧、厳格cursor、UTF-8応答上限、概要・チャンクmapperを追加した。Node.js `24.17.0`、pnpm `11.25.0`で `pnpm check` が成功し、format、ESLint、TypeScript、Vitest 24ファイル196件がすべて成功した。本番production buildも成功した。
+
+: DB reset後のpgTAPは、段階Bのcontext 2件・private schema 48件、段階C 58件、段階D 48件、合計156件がすべて成功した。段階Dでは限定roleのEXECUTE、PUBLIC系roleの拒否、固定search path、関数のSTABLE契約、索引、20/100集計、revision=0の空チャンク、不明world、最大400セル、unlisted/hiddenの識別子なし占有、owner-only本文NULL、一覧category/keyset、DB精度cursor、ランダムpivot、入力上限を確認した。段階B/CのHTTP回帰も成功し、異なるUIDの同一枠100件同時要求は成功1件・`SLOT_TAKEN`99件で、既存の所有権・同時投稿制約を維持した。
+
+: production serverを使う段階D HTTP統合はすべて成功した。公開1,000件・密集400件・unlisted・hidden・owner-only・空worldのfixtureで、overview 20/100、400件チャンクのrevisionと非圧縮サイズ、24/50件一覧とcursorのworld/category拘束、ランダム候補、空集合を確認した。公開JSON・HTML・実RSC payloadに非公開fixture文言はなく、全公開GET前後でAuthユーザー数は不変、Set-Cookieもなかった。
+
+: 同じローカルproduction serverへ各15回要求した実測は、密集400件チャンクがp50 `109.47 ms`・p95 `114.61 ms`・最大 `155,394 bytes`、20枠概要（占有1,002件）がp50 `7.73 ms`・p95 `22.54 ms`・最大 `345 bytes`、公開1,000件中50件の一覧がp50 `13.91 ms`・p95 `26.43 ms`・最大 `18,236 bytes` だった。密集チャンクは通常目標の非圧縮512 KiBと保護上限4 MiBを下回った。これはローカルNode/Postgresの基準値であり、実ブラウザーの描画fpsやcloud RTTの代用にはしない。
+
+実行していない検証と理由:
+: cloud Supabase projectとstagingドメインは未接続のため、実Supavisor、cloud DB advisor、CDNのoverview最大30秒、cloud RTT/LCPは未確認。migration・role・cache header・EXPLAIN・公開範囲の確認手順を `docs/stage-d-setup.md` に記録した。
+
+: 360/390/768/1440pxの実ブラウザー視覚確認、マウス・実機タッチ/ピンチ、Safari/Chrome、スクリーンリーダー、`prefers-reduced-motion`、10秒の密集地図移動で継続30fpsの計測は未実施。Canvasの純粋計算、要求上限、レスポンシブCSS、キーボード経路、HTML一覧は実装・静的検査済みだが、これらは実ブラウザーで確認が必要。
+
+仕様からの変更と理由:
+: 仕様の意味の変更はない。遠景・近景のDB境界、Canvasの一時状態、可視復帰時の破棄、公開一覧のDB精度cursor、索引付きランダム探索は `docs/decisions.md` のADR-D-001〜003へ記録した。
+
+既知の問題・外部設定が必要な項目:
+: cloudのproject URL/publishable key、`emanowa_app` transaction-pooler secret、migration接続、Turnstile、正規origin、本番SMTP、運営者・問い合わせ先は引き続き未設定。設定不足時は書込みを拒否し、地図閲覧のために匿名Authを作ったりデモへ切り替えたりしない。
+
+: 近くへの招待、OG/共有PNG、X・LINE共有は段階E、共有レート制限、通報、管理者の非表示・復帰は段階Fの対象。位置URLは公開地図の場所だけを共有し、unlisted作品の識別子やアクセス権を付与しない。
+
+次に実装する段階:
+: 段階E「共有と近くへの招待」。既存の個別URLと地図位置を基に、公開投影だけを使うOG/共有PNG、共有入口、最大20枠の近隣候補を実装する。

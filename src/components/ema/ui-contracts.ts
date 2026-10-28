@@ -168,6 +168,34 @@ export function canonicalCreatePayload(input: CreateEmaInput): string {
   });
 }
 
+export function applyInitialSlotNumber(
+  stored: StoredEmaDraft,
+  initialSlotNumber: number | null,
+): StoredEmaDraft {
+  if (
+    initialSlotNumber === null ||
+    stored.values.slotNumber === String(initialSlotNumber)
+  ) {
+    return stored;
+  }
+  return {
+    ...stored,
+    values: { ...stored.values, slotNumber: String(initialSlotNumber) },
+    idempotencyKey: null,
+    idempotencyPayload: null,
+  };
+}
+
+export function isExpectedOwnerPublicId(
+  expectedPublicId: string | undefined,
+  actualPublicId: string,
+): boolean {
+  return (
+    expectedPublicId === undefined ||
+    expectedPublicId.toLowerCase() === actualPublicId.toLowerCase()
+  );
+}
+
 export function parseStoredDraft(value: string | null): StoredEmaDraft | null {
   if (!value) return null;
   try {

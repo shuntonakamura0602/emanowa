@@ -26,6 +26,7 @@
     "test:db": "bash scripts/test-local-db.sh",
     "test:stage-b": "supabase db reset --local && bash scripts/test-local-db.sh && node scripts/stage-b-integration.mjs",
     "test:stage-c": "supabase db reset --local && bash scripts/test-local-db.sh && node scripts/stage-b-integration.mjs && node scripts/stage-c-integration.mjs",
+    "test:stage-d": "supabase db reset --local && bash scripts/test-local-db.sh && node scripts/stage-b-integration.mjs && node scripts/stage-c-integration.mjs && node scripts/stage-d-integration.mjs",
     "demo:seed": "node scripts/demo-seed.mjs",
     "demo:clear": "node scripts/demo-clear.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"

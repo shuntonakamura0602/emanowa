@@ -1,4 +1,4 @@
-import { normalizeApiError } from "@/server/api/errors";
+import { ApiRouteError, normalizeApiError } from "@/server/api/errors";
 
 type ResponsePrivacy = "public" | "private";
 
@@ -37,6 +37,52 @@ export function jsonResponse(
   return Response.json(body, {
     status: options.status ?? 200,
     headers: responseHeaders(options.privacy ?? "public", options.headers),
+  });
+}
+
+/** Content-free aggregate statistics are the only P0 public JSON allowed in a
+ * short shared cache. Individual, list, chunk, and owner responses stay
+ * no-store through jsonResponse. */
+export function publicOverviewJsonResponse(body: unknown): Response {
+  const headers = responseHeaders("public");
+  headers.set(
+    "Cache-Control",
+    "public, max-age=0, s-maxage=30, must-revalidate",
+  );
+  return Response.json(body, { status: 200, headers });
+}
+
+export function serializedJsonBytes(body: unknown): number {
+  const serialized = JSON.stringify(body);
+  if (serialized === undefined) {
+    throw new ApiRouteError(
+      "TEMPORARILY_UNAVAILABLE",
+      "応答データを作成できませんでした。時間をおいて再試行してください。",
+    );
+  }
+  return new TextEncoder().encode(serialized).byteLength;
+}
+
+export function boundedPublicJsonResponse(
+  body: unknown,
+  maxBytes: number,
+): Response {
+  const serialized = JSON.stringify(body);
+  if (serialized === undefined) {
+    throw new ApiRouteError(
+      "TEMPORARILY_UNAVAILABLE",
+      "応答データを作成できませんでした。時間をおいて再試行してください。",
+    );
+  }
+  if (new TextEncoder().encode(serialized).byteLength > maxBytes) {
+    throw new ApiRouteError(
+      "TEMPORARILY_UNAVAILABLE",
+      "地図データが大きいため、縮小表示へ戻して再試行してください。",
+    );
+  }
+  return new Response(serialized, {
+    status: 200,
+    headers: responseHeaders("public"),
   });
 }
 
