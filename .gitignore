@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# test and build output
+coverage/
+*.tsbuildinfo
+
+# local environment (the example is intentionally tracked)
+.env
+.env.*
+!.env.example
+
+# development-only fixtures
+.demo/
+
+# editors and operating systems
+.DS_Store
+*.swp
+
+# logs
+*.log
+pnpm-debug.log*

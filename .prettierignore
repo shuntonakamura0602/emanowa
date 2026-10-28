@@ -1,0 +1,7 @@
+.next/
+node_modules/
+coverage/
+.demo/
+pnpm-lock.yaml
+# Product specifications are source documents, not implementation formatting targets.
+docs/spec/**

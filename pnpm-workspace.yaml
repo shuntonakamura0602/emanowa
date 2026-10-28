@@ -1,0 +1,3 @@
+allowBuilds:
+  # eslint-config-next uses the package's pinned native resolver during linting.
+  unrs-resolver: true
