@@ -5,6 +5,7 @@ import type { AnonymousAuthClient } from "@/server/supabase/contracts";
 
 import {
   AnonymousCaptchaRequiredError,
+  AnonymousCaptchaVerificationError,
   AnonymousSignInError,
   ensureAnonymousSession,
   SessionVerificationError,
@@ -78,13 +79,18 @@ function errorResponse(
   requestId: string,
   headers: Headers,
   fieldErrors?: Record<string, string>,
+  retryAfterSeconds?: number,
 ): Response {
+  if (retryAfterSeconds !== undefined) {
+    headers.set("Retry-After", String(retryAfterSeconds));
+  }
   const body: ApiError = {
     error: {
       code,
       message,
       requestId,
       ...(fieldErrors ? { fieldErrors } : {}),
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
     },
   };
   return jsonResponse(body, status, headers);
@@ -315,6 +321,19 @@ export function createAnonymousSessionHandler<
           { captchaToken: "CAPTCHAトークンを指定してください。" },
         );
       }
+      if (error instanceof AnonymousCaptchaVerificationError) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "入力内容を確認してください。",
+          422,
+          requestId,
+          headers,
+          {
+            captchaToken:
+              "CAPTCHAの確認に失敗しました。もう一度お試しください。",
+          },
+        );
+      }
       if (error instanceof SessionVerificationError) {
         return errorResponse(
           "SESSION_EXPIRED",
@@ -332,6 +351,8 @@ export function createAnonymousSessionHandler<
             429,
             requestId,
             headers,
+            undefined,
+            error.retryAfterSeconds,
           );
         }
         return errorResponse(

@@ -17,17 +17,35 @@ const RATE_LIMIT_CODES = new Set([
   "over_email_send_rate_limit",
   "over_request_rate_limit",
 ]);
+const CAPTCHA_FAILURE_CODE = "captcha_failed";
+const PROVIDER_RETRY_AFTER_SECONDS = 60;
+
+type EmailAuthFlowErrorOptions = {
+  authContextChanged?: boolean;
+  fieldErrors?: Record<string, string>;
+  otpRequestNotSent?: boolean;
+  retryAfterSeconds?: number;
+};
 
 export class EmailAuthFlowError extends Error {
   constructor(
     readonly code: ApiErrorCode,
     readonly status: number,
     message: string,
-    readonly authContextChanged = false,
+    options: EmailAuthFlowErrorOptions = {},
   ) {
     super(message);
     this.name = "EmailAuthFlowError";
+    this.authContextChanged = options.authContextChanged ?? false;
+    this.fieldErrors = options.fieldErrors;
+    this.otpRequestNotSent = options.otpRequestNotSent ?? false;
+    this.retryAfterSeconds = options.retryAfterSeconds;
   }
+
+  readonly authContextChanged: boolean;
+  readonly fieldErrors?: Record<string, string>;
+  readonly otpRequestNotSent: boolean;
+  readonly retryAfterSeconds?: number;
 }
 
 function authErrorCode(error: unknown): string | null {
@@ -55,12 +73,33 @@ function invalidOtp(authContextChanged = false): EmailAuthFlowError {
     "INVALID_OTP",
     400,
     "確認コードが無効か、期限が切れています。",
-    authContextChanged,
+    { authContextChanged },
+  );
+}
+
+function providerRateLimited(
+  options: Pick<
+    EmailAuthFlowErrorOptions,
+    "authContextChanged" | "otpRequestNotSent"
+  > = {},
+): EmailAuthFlowError {
+  return new EmailAuthFlowError(
+    "RATE_LIMITED",
+    429,
+    "しばらく待ってからもう一度お試しください。",
+    { ...options, retryAfterSeconds: PROVIDER_RETRY_AFTER_SECONDS },
   );
 }
 
 async function requireAnonymousUser(client: EmailAuthClient) {
-  const current = await client.auth.getUser();
+  let current: Awaited<ReturnType<EmailAuthClient["auth"]["getUser"]>>;
+  try {
+    current = await client.auth.getUser();
+  } catch (error) {
+    if (isRateLimited(error)) throw providerRateLimited();
+    throw error;
+  }
+  if (isRateLimited(current.error)) throw providerRateLimited();
   if (current.error || !current.data.user) {
     throw new EmailAuthFlowError(
       "AUTH_REQUIRED",
@@ -92,15 +131,35 @@ function unsafeSessionCleanupFailed(): EmailAuthFlowError {
     "TEMPORARILY_UNAVAILABLE",
     503,
     "本人情報を安全に確認できませんでした。",
-    true,
+    { authContextChanged: true },
   );
+}
+
+function invalidCaptcha(): EmailAuthFlowError {
+  return new EmailAuthFlowError(
+    "VALIDATION_ERROR",
+    422,
+    "入力内容を確認してください。",
+    {
+      fieldErrors: {
+        captchaToken: "CAPTCHAの確認に失敗しました。もう一度お試しください。",
+      },
+      otpRequestNotSent: true,
+    },
+  );
+}
+
+export async function requireAnonymousEmailLinkSession(
+  client: EmailAuthClient,
+): Promise<string> {
+  return (await requireAnonymousUser(client)).id;
 }
 
 export async function linkAnonymousEmail(
   client: EmailAuthClient,
   email: string,
+  expectedUid: string,
 ): Promise<void> {
-  const before = await requireAnonymousUser(client);
   const updated = await client.auth.updateUser({ email });
 
   if (updated.error) {
@@ -110,14 +169,11 @@ export async function linkAnonymousEmail(
         "ACCOUNT_LINK_CONFLICT",
         409,
         "このメールアドレスは既存のアカウントに登録されています。",
+        { otpRequestNotSent: true },
       );
     }
     if (isRateLimited(updated.error)) {
-      throw new EmailAuthFlowError(
-        "RATE_LIMITED",
-        429,
-        "しばらく待ってからもう一度お試しください。",
-      );
+      throw providerRateLimited({ otpRequestNotSent: true });
     }
     throw new EmailAuthFlowError(
       "TEMPORARILY_UNAVAILABLE",
@@ -126,7 +182,7 @@ export async function linkAnonymousEmail(
     );
   }
 
-  if (!updated.data.user || updated.data.user.id !== before.id) {
+  if (!updated.data.user || updated.data.user.id !== expectedUid) {
     throw new EmailAuthFlowError(
       "TEMPORARILY_UNAVAILABLE",
       503,
@@ -137,8 +193,9 @@ export async function linkAnonymousEmail(
 
 /**
  * Account discovery must not be possible through this endpoint. Once a valid
- * request reaches Supabase Auth, callers always receive the same accepted
- * result, including for unknown addresses, provider errors, and rate limits.
+ * request reaches Supabase Auth, callers receive the same accepted result for
+ * unknown addresses, provider errors, and provider rate limits. CAPTCHA
+ * rejection is surfaced as a field error so a fresh challenge can be shown.
  */
 export async function requestEmailRecovery(
   client: EmailAuthClient,
@@ -146,14 +203,19 @@ export async function requestEmailRecovery(
   captchaToken?: string,
 ): Promise<void> {
   try {
-    await client.auth.signInWithOtp({
+    const result = await client.auth.signInWithOtp({
       email,
       options: {
         shouldCreateUser: false,
         ...(captchaToken ? { captchaToken } : {}),
       },
     });
-  } catch {
+    if (authErrorCode(result.error) === CAPTCHA_FAILURE_CODE) {
+      throw invalidCaptcha();
+    }
+  } catch (error) {
+    if (error instanceof EmailAuthFlowError) throw error;
+    if (authErrorCode(error) === CAPTCHA_FAILURE_CODE) throw invalidCaptcha();
     // Deliberately indistinguishable from an accepted request.
   }
 }
@@ -161,33 +223,44 @@ export async function requestEmailRecovery(
 async function verifyCurrentUser(
   client: EmailAuthClient,
   expectedUid: string,
-): Promise<boolean> {
+): Promise<"verified" | "unverified" | "rate_limited"> {
   try {
     const current = await client.auth.getUser();
+    if (isRateLimited(current.error)) return "rate_limited";
     return Boolean(
       !current.error &&
       current.data.user &&
       current.data.user.id === expectedUid &&
       current.data.user.is_anonymous === false,
-    );
-  } catch {
-    return false;
+    )
+      ? "verified"
+      : "unverified";
+  } catch (error) {
+    return isRateLimited(error) ? "rate_limited" : "unverified";
   }
 }
 
 export async function verifyEmailOtp(
   client: EmailAuthClient,
   input: { flow: "link" | "recover"; email: string; token: string },
+  expectedLinkUid?: string,
 ): Promise<void> {
   const originalUid =
-    input.flow === "link" ? (await requireAnonymousUser(client)).id : null;
+    input.flow === "link"
+      ? (expectedLinkUid ?? (await requireAnonymousUser(client)).id)
+      : null;
   const verified = await client.auth.verifyOtp({
     email: input.email,
     token: input.token,
     type: input.flow === "link" ? "email_change" : "email",
   });
 
-  if (verified.error) throw invalidOtp();
+  if (verified.error) {
+    if (isRateLimited(verified.error)) {
+      throw providerRateLimited();
+    }
+    throw invalidOtp();
+  }
 
   const verifiedUid = verified.data.user?.id ?? verified.data.session?.user.id;
   if (!verifiedUid || (originalUid !== null && verifiedUid !== originalUid)) {
@@ -197,9 +270,13 @@ export async function verifyEmailOtp(
     throw invalidOtp(true);
   }
 
-  if (!(await verifyCurrentUser(client, verifiedUid))) {
+  const currentUserVerification = await verifyCurrentUser(client, verifiedUid);
+  if (currentUserVerification !== "verified") {
     if (!(await clearUnsafeSession(client))) {
       throw unsafeSessionCleanupFailed();
+    }
+    if (currentUserVerification === "rate_limited") {
+      throw providerRateLimited({ authContextChanged: true });
     }
     throw invalidOtp(true);
   }
@@ -214,7 +291,7 @@ export async function signOutLocal(client: EmailAuthClient): Promise<void> {
       "TEMPORARILY_UNAVAILABLE",
       503,
       "この端末のセッションを終了できませんでした。",
-      true,
+      { authContextChanged: true },
     );
   }
   if (result.error) {
@@ -222,7 +299,7 @@ export async function signOutLocal(client: EmailAuthClient): Promise<void> {
       "TEMPORARILY_UNAVAILABLE",
       503,
       "この端末のセッションを終了できませんでした。",
-      true,
+      { authContextChanged: true },
     );
   }
 }

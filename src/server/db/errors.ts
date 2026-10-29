@@ -83,6 +83,7 @@ const CUSTOM_SQLSTATE_ERRORS = {
     "別の画面で更新されています。現在の内容を確認してください。",
   ],
   P1010: ["FORBIDDEN", 403, "この操作は許可されていません。"],
+  P1012: ["ADMIN_REQUIRED", 403, "管理者権限が必要です。"],
 } as const satisfies Record<string, readonly [ApiErrorCode, number, string]>;
 
 function errorTuple(

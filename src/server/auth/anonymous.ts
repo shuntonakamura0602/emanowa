@@ -20,11 +20,13 @@ export class SessionVerificationError extends Error {
 
 export class AnonymousSignInError extends Error {
   readonly status: number | undefined;
+  readonly retryAfterSeconds: number | undefined;
 
   constructor(cause?: unknown) {
     super("匿名セッションを開始できませんでした。", { cause });
     this.name = "AnonymousSignInError";
     this.status = readStatus(cause);
+    this.retryAfterSeconds = this.status === 429 ? 60 : undefined;
   }
 }
 
@@ -33,6 +35,20 @@ export class AnonymousCaptchaRequiredError extends Error {
     super("新しい匿名セッションにはCAPTCHAトークンが必要です。");
     this.name = "AnonymousCaptchaRequiredError";
   }
+}
+
+export class AnonymousCaptchaVerificationError extends Error {
+  constructor() {
+    super("CAPTCHAの確認に失敗しました。");
+    this.name = "AnonymousCaptchaVerificationError";
+  }
+}
+
+function readCode(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || !("code" in value)) {
+    return undefined;
+  }
+  return typeof value.code === "string" ? value.code : undefined;
 }
 
 function readStatus(value: unknown): number | undefined {
@@ -76,6 +92,9 @@ export async function ensureAnonymousSession(
   });
   const uid = signedIn.data.user?.id;
 
+  if (readCode(signedIn.error) === "captcha_failed") {
+    throw new AnonymousCaptchaVerificationError();
+  }
   if (signedIn.error || !isVerifiedSubject(uid)) {
     throw new AnonymousSignInError(signedIn.error);
   }

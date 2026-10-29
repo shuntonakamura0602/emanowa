@@ -29,10 +29,10 @@ pnpm db:reset
 pnpm db:local-role
 ```
 
-表示された `DATABASE_URL` を `.env.local` にコピーします。これは `127.0.0.1:54322` のローカルSupabase専用です。`pnpm db:reset` を行うと `emanowa_app` は再び `NOLOGIN` になります。
+表示された `DATABASE_URL` と `ADMIN_DATABASE_URL` を `.env.local` にコピーします。これは `127.0.0.1:54322` のローカルSupabase専用です。`pnpm db:reset` を行うと両アプリroleは再び `NOLOGIN` になります。
 表示されたURLには一時パスワードが含まれるため、issue、チャット、CIログへ貼り付けません。
 
-`pnpm exec supabase status --output env` でローカルのAPI URLとpublishable keyを確認し、`.env.local` を次のように設定します。実際の値はコミットしません。
+`pnpm exec supabase status --output env` でローカルのAPI URLとpublishable keyを確認し、`openssl rand -hex 32` でdevelopment専用rate-limit HMAC secretを生成して、`.env.local` を次のように設定します。実際の値はコミットしません。
 
 ```dotenv
 EMANOWA_ENVIRONMENT=development
@@ -41,13 +41,14 @@ APP_ORIGIN=http://localhost:3000
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local publishable key>
 DATABASE_URL=<pnpm db:local-roleが表示したURL>
-MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+ADMIN_DATABASE_URL=<pnpm db:local-roleが表示した管理用URL>
+RATE_LIMIT_HMAC_SECRET=<openssl rand -hex 32の出力>
 ENABLE_GROUPS=false
 ENABLE_FULFILLMENT=false
 ENABLE_PAYMENTS=false
 ```
 
-ローカル設定は匿名サインインとmanual linkingを有効にし、CAPTCHAを無効にしています。CAPTCHA省略はdevelopment/testだけで許可されます。
+ローカル設定は匿名サインインとmanual linkingを有効にし、CAPTCHAを無効にしています。CAPTCHA省略はdevelopment/testだけで許可されます。`RATE_LIMIT_HMAC_SECRET` はdevelopmentでも変更要求に必須です。test scriptはprocessへ専用値を注入しますが、手動起動時は上のランダム値を設定してください。
 
 ## DB/Auth統合試験
 
@@ -81,13 +82,24 @@ pnpm exec supabase db push
 
 `supabase/seed.sql` は空枠を生成しない意図を示すno-opです。remoteへ `--include-seed` で適用する必要はありません。本番worldの状態・期間はmigration後に運用値を確認してから変更します。
 
-migration適用後、管理接続で環境専用の強いパスワードを設定します。値はSQL migrationやログへ残しません。
+migration適用後、secret managerから管理接続をそのコマンドの環境へ注入し、環境専用の強いパスワードを対話設定します。remote接続はDB側SSL enforcementを有効にし、少なくとも `sslmode=require`、可能ならprovider CAによる `sslmode=verify-full` を使います。roleは `NOLOGIN` のまま先にpasswordを更新してから `LOGIN` 化し、旧credentialが一時的に復活しない順序にします。接続URLとpasswordはshell/SQL history、SQL migration、ログへ残しません。
 
-```sql
-alter role emanowa_app login password '<環境ごとに生成した秘密値>';
+```text
+PGHOST='<provider DB host>' \
+PGPORT='5432' \
+PGDATABASE='postgres' \
+PGUSER='<migration/DBA role>' \
+PGSSLMODE='verify-full' \
+psql -W
+\password emanowa_app
+ALTER ROLE emanowa_app LOGIN;
+\du emanowa_app
+\q
 ```
 
-通常APIの `DATABASE_URL` はこのロールのtransaction pooler接続（SupabaseのConnect画面にあるtransaction mode、通常はポート6543）を使います。migration、`pg_dump`、復旧だけは `MIGRATION_DATABASE_URL` の直接接続を使います。通常APIへ `postgres`、`supabase_admin`、テーブル所有者、`BYPASSRLS`、`service_role` を設定するとアプリの設定検証が拒否します。
+`psql -W` でmigration/DBA passwordを対話入力するため、passwordを接続URLやprocess argvへ含めません。provider CAが必要なら権限を限定したCA fileを `PGSSLROOTCERT` で指定します。代替として権限0600の `PGSERVICEFILE` / `PGPASSFILE` を使用できます。
+
+通常APIの `DATABASE_URL` はこのロールのtransaction pooler接続（SupabaseのConnect画面にあるtransaction mode、通常はポート6543）を使います。migration、`pg_dump`、復旧では管理用の直接接続をコマンド実行時だけsecret managerから渡し、`.env.local` や実行時アプリ環境には置きません。通常APIへ `postgres`、`supabase_admin`、テーブル所有者、`BYPASSRLS`、`service_role` を設定するとアプリの設定検証が拒否します。
 
 公開環境では少なくとも次を設定します。
 
@@ -99,7 +111,6 @@ NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable key>
 NEXT_PUBLIC_CAPTCHA_SITE_KEY=<site key>
 DATABASE_URL=<emanowa_app transaction pool URL>
-MIGRATION_DATABASE_URL=<migration-only direct URL>
 CAPTCHA_SECRET_KEY=<server secret/configuration sentinel>
 RATE_LIMIT_HMAC_SECRET=<random server secret>
 ```

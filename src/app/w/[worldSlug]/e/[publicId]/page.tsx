@@ -7,7 +7,10 @@ import { emaCanonicalPath } from "@/components/ema/share-contracts";
 import { WorldBreadcrumb } from "@/components/site-shell";
 import { getWorldConfig } from "@/config/worlds";
 import { publicIdSchema } from "@/domain";
-import { getServerRuntimeConfig } from "@/server/config";
+import {
+  getPublicRuntimeConfig,
+  getServerRuntimeConfig,
+} from "@/server/config";
 import { getPublicEma } from "@/server/ema/repository";
 
 export const dynamic = "force-dynamic";
@@ -120,13 +123,16 @@ export default async function EmaDetailPage({
   }
   const ema = await readPublicEma(worldSlug, publicId);
   if (!ema) notFound();
+  const runtimeConfig = getPublicRuntimeConfig();
 
   return (
     <section className="container page-section">
       <WorldBreadcrumb worldSlug={worldSlug} current="絵馬の詳細" />
       <EmaDetailLive
         initialEma={ema}
-        configuredOrigin={getServerRuntimeConfig().appOrigin}
+        configuredOrigin={runtimeConfig.appOrigin}
+        captchaSiteKey={runtimeConfig.captchaSiteKey}
+        captchaRequired={runtimeConfig.captchaRequired}
       />
     </section>
   );

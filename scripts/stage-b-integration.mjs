@@ -240,6 +240,7 @@ async function verifyHttpAuthBoundary({
         EMANOWA_ENVIRONMENT: "test",
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: publishableKey,
         NEXT_PUBLIC_SUPABASE_URL: apiUrl,
+        RATE_LIMIT_HMAC_SECRET: "stage-b-local-integration-only",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

@@ -1,12 +1,14 @@
 import { z } from "zod";
 
 import { INPUT_LIMITS, type ApiError, type ApiErrorCode } from "@/domain";
+import { ApiRouteError } from "@/server/api/errors";
 import type { EnvironmentName } from "@/server/config/parse";
 import type { EmailAuthClient } from "@/server/supabase/contracts";
 
 import {
   EmailAuthFlowError,
   linkAnonymousEmail,
+  requireAnonymousEmailLinkSession,
   requestEmailRecovery,
   signOutLocal,
   verifyEmailOtp,
@@ -70,6 +72,12 @@ export type EmailEndpointDependencies<
     responseHeaders: Headers,
     config: Config,
   ): EmailAuthClient | Promise<EmailAuthClient>;
+  reserveOtpRateLimit(email: string): Promise<{ release(): Promise<void> }>;
+  enforceOtpLinkVerificationRateLimit(actorId: string): Promise<void>;
+  enforceOtpRecoveryVerificationRateLimit(
+    email: string,
+    request: Request,
+  ): Promise<void>;
   createRequestId?(): string;
 };
 
@@ -121,13 +129,18 @@ function errorResponse(
   headers: Headers,
   requestId: string,
   fieldErrors?: Record<string, string>,
+  retryAfterSeconds?: number,
 ): Response {
+  if (retryAfterSeconds !== undefined) {
+    headers.set("Retry-After", String(retryAfterSeconds));
+  }
   const body: ApiError = {
     error: {
       code,
       message,
       requestId,
       ...(fieldErrors ? { fieldErrors } : {}),
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
     },
   };
   return jsonResponse(body, status, headers, requestId);
@@ -352,22 +365,37 @@ export function createEmailEndpointHandler<Config extends EmailEndpointConfig>(
       );
     }
 
+    let otpReservation: { release(): Promise<void> } | null = null;
     try {
       const client = await dependencies.createClient(headers, config);
       if (kind === "link") {
-        await linkAnonymousEmail(
-          client,
-          (body as z.infer<typeof linkBodySchema>).email,
-        );
+        const link = body as z.infer<typeof linkBodySchema>;
+        const expectedUid = await requireAnonymousEmailLinkSession(client);
+        otpReservation = await dependencies.reserveOtpRateLimit(link.email);
+        await linkAnonymousEmail(client, link.email, expectedUid);
         return jsonResponse({ accepted: true }, 202, headers, requestId);
       }
       if (kind === "recover") {
         const recover = body as z.infer<typeof recoverBodySchema>;
+        otpReservation = await dependencies.reserveOtpRateLimit(recover.email);
         await requestEmailRecovery(client, recover.email, recover.captchaToken);
         return jsonResponse({ accepted: true }, 202, headers, requestId);
       }
       if (kind === "verify") {
-        await verifyEmailOtp(client, body as z.infer<typeof verifyBodySchema>);
+        const verify = body as z.infer<typeof verifyBodySchema>;
+        let expectedLinkUid: string | undefined;
+        if (verify.flow === "link") {
+          expectedLinkUid = await requireAnonymousEmailLinkSession(client);
+          await dependencies.enforceOtpLinkVerificationRateLimit(
+            expectedLinkUid,
+          );
+        } else {
+          await dependencies.enforceOtpRecoveryVerificationRateLimit(
+            verify.email,
+            request,
+          );
+        }
+        await verifyEmailOtp(client, verify, expectedLinkUid);
         return jsonResponse(
           { authenticated: true, isAnonymous: false },
           200,
@@ -379,7 +407,31 @@ export function createEmailEndpointHandler<Config extends EmailEndpointConfig>(
       await signOutLocal(client);
       return jsonResponse({ signedOut: true }, 200, headers, requestId);
     } catch (error) {
+      if (error instanceof ApiRouteError) {
+        return errorResponse(
+          error.code,
+          error.message,
+          error.status,
+          headers,
+          requestId,
+          error.fieldErrors,
+          error.retryAfterSeconds,
+        );
+      }
       if (error instanceof EmailAuthFlowError) {
+        if (error.otpRequestNotSent && otpReservation) {
+          try {
+            await otpReservation.release();
+          } catch {
+            return errorResponse(
+              "TEMPORARILY_UNAVAILABLE",
+              "メール送信の回数制限を安全に更新できませんでした。",
+              503,
+              headers,
+              requestId,
+            );
+          }
+        }
         if (error.authContextChanged) {
           headers.set("X-Emanowa-Auth-Context-Changed", "1");
         }
@@ -389,6 +441,8 @@ export function createEmailEndpointHandler<Config extends EmailEndpointConfig>(
           error.status,
           headers,
           requestId,
+          error.fieldErrors,
+          error.retryAfterSeconds,
         );
       }
       if (kind === "verify") {

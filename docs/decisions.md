@@ -193,3 +193,41 @@ XとLINEの入口は本人が確認できる共有dialogから外部の投稿・
 P0の `ema_created`、`share_opened`、`share_clicked`、`link_copied`、`share_image_downloaded`、`invite_landed`、`invite_ema_created` は、`emanowa:measurement` というブラウザー `CustomEvent` で通知できるようにする。型付きpayloadは年、共有先、通常/招待の区別だけを許し、願い本文、表示名、メール、公開ID、URL、token、Cookieを受け取らない。
 
 外部analytics providerや永続collectorはリポジトリへ仮設定しない。接続する場合はこのeventのlistener側で行い、失敗や未接続でも共有、コピー、画像保存、投稿を止めない。`share_clicked` は共有先を選んだ事実であり、X投稿完了やLINE送信完了として数えない。
+
+## ADR-F-001: 回数制限はDB共有bucketを正本にして障害時は変更要求を閉じる
+
+- 状態: 採用
+- 日付: 2026-10-29
+- 関連仕様: 04 §11、07 段階F・OPS-02〜04
+
+作成・編集・通報はAuth UID、画像は信頼済みproxy chainから得た送信元、OTPは正規化した宛先をsubjectとし、actionを含むHMAC-SHA-256だけを `rate_limit_buckets` へ保存する。生のUID、メール、IPはbucketへ保存しない。制限値・windowはアプリとDB関数のallow-listに固定し、利用者引数で緩和できない。作成・編集・通報・画像は原子的upsert、OTPはsubject単位のtransaction advisory lockと要求時刻から連続60秒の予約で複数instanceの状態を共有し、期限切れbucketは索引付きで回収する。これにより暦分境界を跨いでも同一宛先へ連続送信しない。
+
+OTPはopaqueなreservation UUIDをbucketへ保持し、Auth providerが送信していないと明示できるCAPTCHA拒否・メール競合等だけ、その一致予約を原子的に解放する。送信有無が不明な障害は安全側で消費済みのままにし、別要求の予約を戻さない。6桁コードの確認試行は送信予約と独立した共有counterとし、メール追加はfresh匿名UIDをsubjectにして5回/10分に制限する。復帰確認には、(1) 信頼済み送信元ごとに全宛先を横断する30回/10分、(2) 正規化宛先ごとに全送信元を横断する30回/10分、(3) 正規化宛先と信頼済み送信元の組ごとの5回/10分を同時に適用する。送信元全体の上限で宛先を切り替える試行、宛先全体の上限で送信元を切り替える試行、組ごとの低い上限で局所的な連続試行をそれぞれ有限にする。集約上限を組ごとの上限より高くして、単一の宛先または送信元を知る第三者が少数回で広範囲の確認枠を塞ぐ影響も抑えつつ、providerへ無制限に確認要求を通さない。
+
+復帰確認の三層は汎用counterを3回順次消費せず、専用DB関数が1 transaction内で三つのsubjectを決定的な順序でadvisory lockし、まとめて判定する。組の上限が枯渇した場合は組のbucketだけを更新して宛先全体・送信元全体を消費せず、いずれかの広域軸が枯渇した場合はその軸だけを更新して、ローテーションのたびに新しい組やもう一方の広域軸のbucketを作らない。拒否された試行で無関係な利用者・送信元の余力をpoisonしないことも制限契約に含める。復帰用の `otp_verify`、`otp_verify_target`、`otp_verify_source` は汎用 `consume_rate_limit` のallow-listに含めず、この専用関数だけが更新できるようにして汎用経路との競合を閉じる。メール追加の確認だけは独立action `otp_verify_link` の5回/600秒を汎用関数で消費する。
+
+上限超過は429と `Retry-After` / `retryAfterSeconds` を返し、入力と冪等keyを保持する。HMAC秘密、信頼proxy段数、共有DB関数が利用不能な変更要求は503で閉じ、process内Mapやdemo adapterへ黙って切り替えない。公開JSON閲覧はrate store障害に巻き込まず、画像生成だけは仕様の送信元制限対象として503にする。
+
+## ADR-F-002: 管理権限をfresh Auth・AAL2・DB台帳と専用接続の積にする
+
+- 状態: 採用
+- 日付: 2026-10-29
+- 関連仕様: 04 §6.2・§8、07 段階F・OPS-05〜06
+
+管理画面と全管理APIは、検証済みclaims、同一UIDのfresh user、非匿名、確認済みメール、Supabase MFAのAAL2を確認する。その後、管理用DB transactionごとに `admin_users.enabled` の現在値を確認する。メール文字列、nickname、`user_metadata`、URLの秘匿は権限根拠にしない。画面gateと各APIの認可は独立して行う。
+
+通常BFFの `emanowa_app` と管理BFFの `emanowa_admin_app` はmigrationで `NOLOGIN/NOINHERIT/NOBYPASSRLS` として作成し、環境provisioning時にこの2ロールだけを別passwordで `LOGIN` 化して別secret・別poolから接続する。限定4ロールが親roleを持たない状態もmigrationで正規化し、`NOINHERIT`だけでは残る `SET ROLE` 経路を閉じる。いずれもprivate tableへ直接権限を持たず、相互の関数を実行できない。管理者台帳は第三の `emanowa_admin_provisioner` へ列単位の最小権限だけを与え、migration sessionがUUID指定のenable/disable transaction中に一時grantして即時revokeする。provisionerとobject ownerは常に `NOLOGIN/NOINHERIT/NOBYPASSRLS` とし、LOGIN資格情報を与えない。
+
+通常・管理poolは共通の検証済み接続契約からだけ生成する。username、password、host、port、databaseの完全指定とURL authorityのroleを用途別に固定し、remote URLは `sslmode=require|verify-ca|verify-full` を必須、queryは重複のないTLS設定だけを許可する。host、user、password、port、options、timeoutのquery上書きは接続前に拒否し、Supavisorの `role.project-ref` は完全なusernameのまま保持する。検証後はraw URLをdriverへ渡さず構造化configに変換し、UTF-8、session options、非replication、timeout、TLSを固定する。loopbackだけは明示的に非TLSとし、process全体の `PGHOST`、`PGOPTIONS`、`PGSSLMODE` 等で接続契約を変えない。
+
+TOTPのQR、秘密鍵、6桁code、factor/challenge情報はAuth SDKとReactの一時状態だけで扱い、URL、Web Storage、計測、アプリログへ保存しない。有効台帳にないAAL2利用者へ管理内容を返さず、台帳無効化は次のAPI要求から反映する。
+
+## ADR-F-003: 通報と作品モデレーションを分離し、公開投影を同期更新する
+
+- 状態: 採用
+- 日付: 2026-10-29
+- 関連仕様: 04 §5・§6.2・§8・§9.2、07 段階F
+
+通報は理由列挙と200書記素・2KiBのplain textだけを受け、同じreporter/emaのopen行を部分一意索引とadvisory lockで1件にする。同じ冪等keyは同じreceipt、別keyの重複open通報は既存IDを200で返す。通報件数を作品状態へ連動させず、通報者情報を管理DTOや公開応答へ出さない。
+
+hide/restore/deleteは管理専用関数で対象行とworldをロックし、expected version、現在の有効管理者、列挙理由を再確認する。原本、公開投影、占有、chunk count/revision、冪等receipt、監査を同じtransactionで更新する。監査にはadmin/ema内部ID、action/reason、前後状態、時刻だけを残し、本文、表示名、通報detail、メールを保存しない。owner-only本文は管理一覧にも出さず、hidden/deletedは新しい公開応答から同期的に除外する。

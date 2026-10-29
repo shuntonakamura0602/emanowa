@@ -25,6 +25,7 @@ import {
   requireWriteConfiguration,
 } from "@/server/config";
 import { createEma, listPublicEmas } from "@/server/ema/repository";
+import { enforceActorRateLimit } from "@/server/rate-limit/enforce";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -96,6 +97,7 @@ export async function POST(
     const slug = parseQueryValue(worldSlugSchema, rawSlug, "worldSlug");
     const idempotencyKey = readIdempotencyKey(request);
     const input = await readCreateEmaInput(request);
+    await enforceActorRateLimit("create", actor.uid);
     const result = await createEma(actor.uid, slug, input, idempotencyKey);
 
     return jsonResponse(

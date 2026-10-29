@@ -13,8 +13,6 @@ const configuredEnvironment = {
   NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "publishable-test-key",
   DATABASE_URL: "postgresql://emanowa_app:secret@localhost:5432/emanowa",
-  MIGRATION_DATABASE_URL:
-    "postgresql://migration:other-secret@localhost:5432/emanowa",
   CAPTCHA_SECRET_KEY: "captcha-secret-sentinel",
   NEXT_PUBLIC_CAPTCHA_SITE_KEY: "captcha-site-key",
   RATE_LIMIT_HMAC_SECRET: "rate-limit-secret-sentinel",
@@ -48,7 +46,7 @@ describe("parseServerEnvironment", () => {
     });
     expect(config.serviceStatus).toBe("ready");
     expect(config.writesAvailable).toBe(true);
-    expect(config.database.roleName).toBe("emanowa_app");
+    expect(config.database.connection?.roleName).toBe("emanowa_app");
     expect(config.captcha.configured).toBe(true);
     expect(toPublicRuntimeConfigSource(config).captchaRequired).toBe(false);
   });
@@ -127,6 +125,96 @@ describe("parseServerEnvironment", () => {
     );
   });
 
+  it("keeps normal and moderation database privileges on separate roles", () => {
+    const valid = parseServerEnvironment({
+      ...configuredEnvironment,
+      ADMIN_DATABASE_URL:
+        "postgresql://emanowa_admin_app:secret@localhost:5432/emanowa",
+    });
+    expect(valid.database.adminConfigured).toBe(true);
+    expect(valid.database.adminConnection?.roleName).toBe("emanowa_admin_app");
+
+    const invalid = parseServerEnvironment({
+      ...configuredEnvironment,
+      ADMIN_DATABASE_URL:
+        "postgresql://emanowa_app:secret@localhost:5432/emanowa",
+    });
+    expect(invalid.database.adminConfigured).toBe(false);
+    expect(invalid.issues).toContainEqual(
+      expect.objectContaining({
+        key: "ADMIN_DATABASE_URL",
+        code: "forbidden",
+      }),
+    );
+
+    const unsafe = parseServerEnvironment({
+      ...configuredEnvironment,
+      ADMIN_DATABASE_URL:
+        "postgresql://emanowa_admin_app:secret@db.example.com:6543/emanowa?sslmode=verify-full&host=attacker.example.com",
+    });
+    expect(unsafe.database.adminConfigured).toBe(false);
+    expect(unsafe.database.adminConnection).toBeNull();
+    expect(unsafe.issues).toContainEqual(
+      expect.objectContaining({
+        key: "ADMIN_DATABASE_URL",
+        code: "invalid",
+      }),
+    );
+  });
+
+  it("rejects connection-string query overrides before enabling database mode", () => {
+    const unsafeUrls = [
+      "postgresql://emanowa_app:secret@db.example.com:6543/emanowa?sslmode=verify-full&host=attacker.example.com",
+      "postgresql://emanowa_app:secret@db.example.com:6543/emanowa?sslmode=no-verify",
+      "postgresql://emanowa_app:secret@db.example.com:6543/emanowa?sslmode=verify-full&sslmode=require",
+      "postgresql://emanowa_app:secret@db.example.com:6543/emanowa?sslmode=verify-full&statement_timeout=0",
+    ];
+
+    for (const databaseUrl of unsafeUrls) {
+      const config = parseServerEnvironment({
+        ...configuredEnvironment,
+        DATABASE_URL: databaseUrl,
+      });
+
+      expect(config.database.configured).toBe(false);
+      expect(config.database.connection).toBeNull();
+      expect(config.dataMode).toBe("unconfigured");
+      expect(config.writesAvailable).toBe(false);
+      expect(config.issues).toContainEqual(
+        expect.objectContaining({
+          key: "DATABASE_URL",
+          code: "invalid",
+          severity: "error",
+        }),
+      );
+    }
+  });
+
+  it("accepts Supavisor-style pooler usernames without weakening role checks", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      DATABASE_URL:
+        "postgresql://emanowa_app.project-ref:secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/emanowa?sslmode=verify-full",
+      ADMIN_DATABASE_URL:
+        "postgresql://emanowa_admin_app.project-ref:secret@aws-0-ap-northeast-1.pooler.supabase.com:6543/emanowa?sslmode=verify-full",
+    });
+
+    expect(config.database.connection).toEqual(
+      expect.objectContaining({
+        roleName: "emanowa_app",
+        transportSecurity: "verify-full",
+      }),
+    );
+    expect(config.database.adminConnection).toEqual(
+      expect.objectContaining({
+        roleName: "emanowa_admin_app",
+        transportSecurity: "verify-full",
+      }),
+    );
+    expect(config.database.configured).toBe(true);
+    expect(config.database.adminConfigured).toBe(true);
+  });
+
   it("requires CAPTCHA configuration for staging and production writes", () => {
     const config = parseServerEnvironment({
       ...configuredEnvironment,
@@ -145,6 +233,33 @@ describe("parseServerEnvironment", () => {
         expect.objectContaining({ key: "CAPTCHA_SECRET_KEY" }),
       ]),
     );
+  });
+
+  it("requires shared rate-limit and trusted proxy settings publicly", () => {
+    const missing = parseServerEnvironment({
+      ...configuredEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: undefined,
+      TRUSTED_PROXY_HOPS: undefined,
+    });
+    expect(missing.writesAvailable).toBe(false);
+    expect(missing.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "RATE_LIMIT_HMAC_SECRET" }),
+        expect.objectContaining({ key: "TRUSTED_PROXY_HOPS" }),
+      ]),
+    );
+
+    const configured = parseServerEnvironment({
+      ...configuredEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      TRUSTED_PROXY_HOPS: "1",
+      ADMIN_DATABASE_URL:
+        "postgresql://emanowa_admin_app:secret@localhost:5432/emanowa",
+    });
+    expect(configured.trustedProxyHops).toBe(1);
+    expect(configured.writesAvailable).toBe(true);
   });
 
   it("fails closed when NODE_ENV is production but deployment environment is omitted", () => {

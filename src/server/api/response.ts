@@ -99,6 +99,9 @@ export function apiErrorResponse(
   }
   const headers = responseHeaders(privacy, upstreamHeaders);
   headers.set("X-Request-ID", normalized.body.error.requestId);
+  if (normalized.body.error.retryAfterSeconds !== undefined) {
+    headers.set("Retry-After", String(normalized.body.error.retryAfterSeconds));
+  }
   return Response.json(normalized.body, {
     status: normalized.status,
     headers,

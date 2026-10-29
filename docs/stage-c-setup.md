@@ -22,7 +22,6 @@ APP_ORIGIN=http://localhost:3000
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local publishable key>
 DATABASE_URL=<pnpm db:local-roleが表示したURL>
-MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
 RATE_LIMIT_HMAC_SECRET=<ローカル専用の十分に長いランダム値>
 ```
 

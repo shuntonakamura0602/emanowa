@@ -9,6 +9,11 @@ import type {
   PublicRuntimeConfigSource,
   PublicServiceStatus,
 } from "@/config/public";
+import {
+  validateDatabaseConnectionUrl,
+  type ApplicationDatabaseRole,
+  type ValidatedDatabaseConnection,
+} from "@/server/config/database";
 
 export type EnvironmentName = "development" | "test" | "staging" | "production";
 
@@ -33,10 +38,10 @@ export type ServerRuntimeConfig = {
     configured: boolean;
   };
   database: {
-    url: string | null;
-    migrationUrl: string | null;
-    roleName: string | null;
+    connection: ValidatedDatabaseConnection<"emanowa_app"> | null;
+    adminConnection: ValidatedDatabaseConnection<"emanowa_admin_app"> | null;
     configured: boolean;
+    adminConfigured: boolean;
   };
   captcha: {
     siteKey: string | null;
@@ -45,6 +50,7 @@ export type ServerRuntimeConfig = {
     required: boolean;
   };
   rateLimitHmacSecret: string | null;
+  trustedProxyHops: number | null;
   operations: {
     operatorName: string | null;
     contactUrl: string | null;
@@ -182,40 +188,48 @@ function parseHttpOrigin(
   }
 }
 
-function parseDatabaseUrl(
+function parseApplicationDatabaseConnection<
+  Role extends ApplicationDatabaseRole,
+>(
   source: EnvironmentSource,
   key: string,
+  expectedRole: Role,
   issues: ConfigurationIssue[],
-): string | null {
+): ValidatedDatabaseConnection<Role> | null {
   const raw = value(source, key);
   if (!raw) return null;
 
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
-      throw new Error("unsupported protocol");
-    }
-    return raw;
-  } catch {
+  const result = validateDatabaseConnectionUrl(raw, expectedRole);
+  if (!result.ok) {
     issues.push({
       key,
-      code: "invalid",
+      code: result.code,
       severity: "error",
-      message: "PostgreSQLの有効な接続URLを指定してください。",
+      message: result.message,
     });
     return null;
   }
+
+  return result.connection;
 }
 
-function databaseRoleName(databaseUrl: string | null): string | null {
-  if (!databaseUrl) return null;
-
-  try {
-    const username = decodeURIComponent(new URL(databaseUrl).username);
-    return username.split(".", 1)[0] || null;
-  } catch {
+function parseTrustedProxyHops(
+  source: EnvironmentSource,
+  issues: ConfigurationIssue[],
+): number | null {
+  const raw = value(source, "TRUSTED_PROXY_HOPS");
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 8) {
+    issues.push({
+      key: "TRUSTED_PROXY_HOPS",
+      code: "invalid",
+      severity: "error",
+      message: "信頼するプロキシ段数を1〜8の整数で指定してください。",
+    });
     return null;
   }
+  return parsed;
 }
 
 function addMissingIssue(
@@ -286,10 +300,16 @@ export function parseServerEnvironment(
     source,
     "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
   );
-  const databaseUrl = parseDatabaseUrl(source, "DATABASE_URL", issues);
-  const migrationDatabaseUrl = parseDatabaseUrl(
+  const databaseConnection = parseApplicationDatabaseConnection(
     source,
-    "MIGRATION_DATABASE_URL",
+    "DATABASE_URL",
+    "emanowa_app",
+    issues,
+  );
+  const adminDatabaseConnection = parseApplicationDatabaseConnection(
+    source,
+    "ADMIN_DATABASE_URL",
+    "emanowa_admin_app",
     issues,
   );
 
@@ -307,13 +327,14 @@ export function parseServerEnvironment(
   }
 
   const supabaseConfigured = Boolean(supabaseUrl && supabasePublishableKey);
-  const databaseConfigured = Boolean(databaseUrl);
-  const databaseRole = databaseRoleName(databaseUrl);
+  const databaseConfigured = Boolean(databaseConnection);
   const captchaSiteKey = value(source, "NEXT_PUBLIC_CAPTCHA_SITE_KEY");
   const captchaSecretKey = value(source, "CAPTCHA_SECRET_KEY");
   const captchaConfigured = Boolean(captchaSiteKey && captchaSecretKey);
   const captchaRequired =
     environment === "production" || environment === "staging";
+  const rateLimitHmacSecret = value(source, "RATE_LIMIT_HMAC_SECRET");
+  const trustedProxyHops = parseTrustedProxyHops(source, issues);
 
   if (!appOrigin) {
     addMissingIssue(
@@ -339,7 +360,7 @@ export function parseServerEnvironment(
       "Supabase Authの公開用キーがありません。",
     );
   }
-  if (!databaseConfigured) {
+  if (!value(source, "DATABASE_URL")) {
     addMissingIssue(
       issues,
       environment,
@@ -347,14 +368,13 @@ export function parseServerEnvironment(
       "本番保存用DBの接続がありません。",
     );
   }
-  if (databaseRole && databaseRole !== "emanowa_app") {
-    issues.push({
-      key: "DATABASE_URL",
-      code: "forbidden",
-      severity: "error",
-      message:
-        "通常APIは限定・非所有者・NOBYPASSRLSの emanowa_app ロールで接続してください。",
-    });
+  if (!value(source, "ADMIN_DATABASE_URL")) {
+    addMissingIssue(
+      issues,
+      environment,
+      "ADMIN_DATABASE_URL",
+      "管理API用の限定DB接続がありません。",
+    );
   }
   if (captchaRequired && !captchaSiteKey) {
     addMissingIssue(
@@ -370,6 +390,32 @@ export function parseServerEnvironment(
       environment,
       "CAPTCHA_SECRET_KEY",
       "公開環境の匿名登録にはCAPTCHA secret設定が必要です。",
+    );
+  }
+  if (!rateLimitHmacSecret) {
+    addMissingIssue(
+      issues,
+      environment,
+      "RATE_LIMIT_HMAC_SECRET",
+      "共有回数制限のHMAC秘密がありません。",
+    );
+  } else if (
+    captchaRequired &&
+    new TextEncoder().encode(rateLimitHmacSecret).byteLength < 32
+  ) {
+    issues.push({
+      key: "RATE_LIMIT_HMAC_SECRET",
+      code: "invalid",
+      severity: "error",
+      message: "公開環境では32バイト以上のランダム値を指定してください。",
+    });
+  }
+  if (captchaRequired && trustedProxyHops === null) {
+    addMissingIssue(
+      issues,
+      environment,
+      "TRUSTED_PROXY_HOPS",
+      "画像生成の送信元を安全に判定するプロキシ段数が必要です。",
     );
   }
 
@@ -389,6 +435,7 @@ export function parseServerEnvironment(
     dataMode === "database" &&
     supabaseConfigured &&
     databaseConfigured &&
+    Boolean(rateLimitHmacSecret) &&
     !issues.some((issue) => issue.severity === "error");
 
   const serviceStatus: PublicServiceStatus =
@@ -410,10 +457,10 @@ export function parseServerEnvironment(
       configured: supabaseConfigured,
     },
     database: {
-      url: databaseUrl,
-      migrationUrl: migrationDatabaseUrl,
-      roleName: databaseRole,
+      connection: databaseConnection,
+      adminConnection: adminDatabaseConnection,
       configured: databaseConfigured,
+      adminConfigured: Boolean(adminDatabaseConnection),
     },
     captcha: {
       siteKey: captchaSiteKey,
@@ -421,7 +468,8 @@ export function parseServerEnvironment(
       configured: captchaConfigured,
       required: captchaRequired,
     },
-    rateLimitHmacSecret: value(source, "RATE_LIMIT_HMAC_SECRET"),
+    rateLimitHmacSecret,
+    trustedProxyHops,
     operations: {
       operatorName: value(source, "OPERATOR_NAME"),
       contactUrl: value(source, "CONTACT_URL"),

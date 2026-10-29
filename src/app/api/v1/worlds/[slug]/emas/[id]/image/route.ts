@@ -9,6 +9,7 @@ import {
 } from "@/server/api/request";
 import { apiErrorResponse } from "@/server/api/response";
 import { getPublicEma } from "@/server/ema/repository";
+import { enforceImageRateLimit } from "@/server/rate-limit/enforce";
 import {
   EMA_IMAGE_VARIANTS,
   publicEmaImageFingerprint,
@@ -35,6 +36,7 @@ export async function GET(
       readSingleQueryParam(query, "variant") ?? "og",
       "variant",
     );
+    await enforceImageRateLimit(request);
 
     let current = await getPublicEma(slug, publicId);
     if (!current) {

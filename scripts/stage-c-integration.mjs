@@ -372,6 +372,12 @@ async function waitForOtp(email, excludedIds = new Set()) {
   throw new Error(`OTP for ${email} was not found in local Mailpit`);
 }
 
+async function resetOtpRateLimitFixture(adminPool) {
+  await adminPool.query(
+    "delete from app_private.rate_limit_buckets where action = 'otp'",
+  );
+}
+
 async function verifyHttpAndEmail({
   adminPool,
   apiUrl,
@@ -590,6 +596,9 @@ async function verifyHttpAndEmail({
       "owner GET did not identify the linked registered session",
     );
 
+    // The product intentionally shares one OTP quota across link/recover. Keep
+    // these independent Stage C flows deterministic without weakening it.
+    await resetOtpRateLimitFixture(adminPool);
     const recovered = new BrowserSession(baseUrl);
     const recoverResponse = await recovered.post("/api/v1/auth/email/recover", {
       email,
@@ -634,6 +643,7 @@ async function verifyHttpAndEmail({
       "signed-out session still accessed owner data",
     );
 
+    await resetOtpRateLimitFixture(adminPool);
     const conflict = new BrowserSession(baseUrl);
     await anonymous(conflict);
     const conflictResponse = await conflict.post("/api/v1/auth/email/link", {
@@ -738,16 +748,19 @@ async function main() {
     "serviceRoleKey",
     "secretKey",
   );
-  const adminDatabaseUrl =
+  const rawAdminDatabaseUrl =
     pick(status, "DB_URL", "dbUrl", "db_url") ??
     "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+  const adminDatabaseUrl = new URL(rawAdminDatabaseUrl);
+  adminDatabaseUrl.username = "supabase_admin";
+  const adminDatabaseUrlString = adminDatabaseUrl.toString();
   assert(
     apiUrl && publishableKey && serviceRoleKey,
     "local Supabase status is incomplete",
   );
 
   const adminPool = new Pool({
-    connectionString: adminDatabaseUrl,
+    connectionString: adminDatabaseUrlString,
     max: 4,
     allowExitOnIdle: true,
   });
@@ -764,7 +777,7 @@ async function main() {
       `alter role emanowa_owner login password '${ownerPassword}'`,
     );
     const databaseUrl = roleConnectionUrl(
-      adminDatabaseUrl,
+      adminDatabaseUrlString,
       "emanowa_app",
       appPassword,
     );
@@ -775,7 +788,7 @@ async function main() {
     });
     ownerPool = new Pool({
       connectionString: roleConnectionUrl(
-        adminDatabaseUrl,
+        adminDatabaseUrlString,
         "emanowa_owner",
         ownerPassword,
       ),

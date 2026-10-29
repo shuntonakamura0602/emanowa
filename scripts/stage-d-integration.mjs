@@ -916,6 +916,7 @@ async function main() {
       EMANOWA_ENVIRONMENT: "test",
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: publishableKey,
       NEXT_PUBLIC_SUPABASE_URL: apiUrl,
+      RATE_LIMIT_HMAC_SECRET: "stage-d-local-integration-only",
       NODE_ENV: "production",
     };
 

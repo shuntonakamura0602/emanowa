@@ -179,4 +179,38 @@ describe("anonymous session endpoint", () => {
     });
     expect(client.auth.signInAnonymously).not.toHaveBeenCalled();
   });
+
+  it("returns Retry-After and retryAfterSeconds for provider throttling", async () => {
+    const client = mockClient({ data: null, error: null });
+    vi.mocked(client.auth.signInAnonymously).mockResolvedValue({
+      data: { user: null, session: null },
+      error: { code: "over_request_rate_limit", status: 429 },
+    } as never);
+    const { POST } = handler(developmentConfig, client);
+    const response = await POST(request("{}"));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect((await response.json()).error.retryAfterSeconds).toBe(60);
+  });
+
+  it("returns a fresh-challenge field error when provider CAPTCHA fails", async () => {
+    const client = mockClient({ data: null, error: null });
+    vi.mocked(client.auth.signInAnonymously).mockResolvedValue({
+      data: { user: null, session: null },
+      error: { code: "captcha_failed", status: 400 },
+    } as never);
+    const config: AnonymousEndpointConfig = {
+      ...developmentConfig,
+      environment: "production",
+      captcha: { configured: true, required: true },
+    };
+    const { POST } = handler(config, client);
+    const response = await POST(request('{"captchaToken":"invalid"}'));
+
+    expect(response.status).toBe(422);
+    expect(
+      (await response.json()).error.fieldErrors.captchaToken,
+    ).toBeDefined();
+  });
 });

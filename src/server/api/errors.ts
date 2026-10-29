@@ -13,17 +13,23 @@ export class ApiRouteError extends Error {
   readonly code: ApiErrorCode;
   readonly status: number;
   readonly fieldErrors?: Record<string, string>;
+  readonly retryAfterSeconds?: number;
 
   constructor(
     code: ApiErrorCode,
     message: string,
-    options: { status?: number; fieldErrors?: Record<string, string> } = {},
+    options: {
+      status?: number;
+      fieldErrors?: Record<string, string>;
+      retryAfterSeconds?: number;
+    } = {},
   ) {
     super(message);
     this.name = "ApiRouteError";
     this.code = code;
     this.status = options.status ?? API_ERROR_HTTP_STATUS[code];
     this.fieldErrors = options.fieldErrors;
+    this.retryAfterSeconds = options.retryAfterSeconds;
   }
 }
 
@@ -51,6 +57,9 @@ export function normalizeApiError(error: unknown): {
           message: error.message,
           requestId,
           ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+          ...(error.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: error.retryAfterSeconds }
+            : {}),
         },
       },
     };

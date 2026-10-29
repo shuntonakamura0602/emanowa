@@ -14,6 +14,7 @@ import {
   requireWriteConfiguration,
 } from "@/server/config";
 import { deleteEma, updateEma } from "@/server/ema/repository";
+import { enforceActorRateLimit } from "@/server/rate-limit/enforce";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,7 @@ export async function PATCH(
     const { actor, publicId } = await actorAndId(params, authHeaders);
     const idempotencyKey = readIdempotencyKey(request);
     const input = await readUpdateEmaInput(request);
+    await enforceActorRateLimit("edit", actor.uid);
     const result = await updateEma(actor.uid, publicId, input, idempotencyKey);
     return jsonResponse(
       { receipt: result.receipt },

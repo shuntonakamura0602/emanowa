@@ -242,3 +242,56 @@ DB migration / 設定変更:
 
 次に実装する段階:
 : 段階F「通報・運用・不正利用対策」。通報、管理者の非表示・復帰、監査記録、複数instanceで共有するrate limit、CAPTCHA運用を実装する。
+
+## 段階F — 通報・運用・不正利用対策
+
+対象段階:
+: P0 段階F「通報・運用・不正利用対策」（実装・ローカルDB/Auth/MFA/複数instance統合検証完了）
+
+実装した体験:
+: 公開詳細へ通報dialogを追加し、列挙された理由と任意の200書記素・UTF-8 2KiB以内の補足だけをplain textとして受け付ける。同じ利用者・同じ絵馬の未解決通報は1件に集約し、同じ冪等keyの再送は同じreceipt、別keyの重複は既存report IDを返す。通報件数だけで作品を自動非表示にせず、入力、冪等key、429の再試行時刻を画面に保持する。
+
+: 作成10回/分、編集30回/10分、通報5回/時、画像30回/分、OTP送信は同一宛先へ要求時刻から連続60秒、OTP確認はメール追加5回/10分、復帰確認は信頼済み送信元全体30回/10分、正規化宛先全体30回/10分、宛先＋送信元の組ごと5回/10分を、複数instanceで共有するPostgres bucketへ実装した。作成・編集・通報は検証済みUID、画像は信頼済みproxy chainから得た送信元、OTP送信はNFC・小文字化した宛先、メール追加確認はfresh匿名UID、復帰確認は信頼済み送信元、正規化宛先、正規化宛先＋送信元の三つを使い、action別HMAC-SHA-256だけを保存する。信頼済み送信元は同じIPv6の圧縮・展開表記を一つにし、IPv4-mapped IPv6を同じIPv4 subjectへcanonicalizeする。復帰確認の三層は専用DB関数が1 transactionと決定的なadvisory lock順序で原子的に判定し、枯渇した軸だけを更新する。メール追加だけは `otp_verify_link` を汎用関数で消費する。OTP送信はopaqueな要求UUIDで予約し、CAPTCHA拒否等の送信前失敗だけ一致予約を解放する。上限超過は429と `Retry-After`、store・HMAC・proxy設定障害時の変更要求は503で閉じ、公開閲覧は継続する。
+
+: `/admin` と管理APIを、検証済みclaims、同じUIDのfresh Auth user、非匿名・確認済みメール、Supabase TOTPのAAL2、有効なDB管理者台帳の積で保護した。TOTP enrollment、QR/秘密鍵の一時表示、challenge/verify、通報keyset一覧、絵馬の非表示・復帰・削除、通報の解決・却下を実装した。QR、秘密鍵、6桁code、factor/challengeをURL、Web Storage、計測、ログへ保存しない。画面gateと各APIは独立して認可し、通常DB接続と管理DB接続を分離する。
+
+: hideは公開投影だけを外して本人枠と占有を保持し、restoreは現在の公開設定から投影を再作成し、deleteは本文・表示名を抹消して投影・占有を削除する。原本、投影、占有、chunk集計、version、冪等receipt、監査を同じtransactionで更新する。監査には管理者UID、内部対象ID、action/reason、前後状態、時刻だけを残し、本文、表示名、通報補足、メールを保存しない。
+
+: 管理者台帳をUUIDで有効化・無効化するCLIを追加した。確認済みメール、非匿名、未削除、非banをDB内で確認し、専用provisionerの一時membership、actor設定、台帳更新、revokeを1 transactionで行う。通常/admin/owner/provisioner接続を拒否し、全DB URLへusername、password、host、port、databaseの明示を必須にした。remote接続はTLS設定だけをallow-listしてhost、role、password、port、options、timeoutのquery上書きを接続前に拒否する。通常/admin実行時poolと管理CLIはraw URLをdriverへ渡さず構造化configへ変換し、ambient `PG*` を遮断しながらSupavisorの完全なusernameを保持する。ロールprovisioning、受付停止、CAPTCHA、proxy、MFA、障害時の設定・確認手順を `docs/stage-f-setup.md` に記録した。
+
+主な変更ファイル:
+: `supabase/migrations/20261029032612_stage_f_moderation_rate_limits.sql`、`supabase/tests/database/stage_f_moderation_rate_limits.test.sql`、`src/server/rate-limit/`、`src/server/reports/`、`src/server/admin/`、`src/app/api/v1/admin/`、`src/app/api/v1/worlds/[slug]/emas/[id]/reports/`、`src/components/admin/`、`src/components/ema/ema-report-panel.tsx`、`scripts/manage-admin.mjs`、`scripts/stage-f-integration.mjs`、`docs/stage-f-setup.md`
+
+DB migration / 設定変更:
+: `reports`、`admin_users`、`moderation_audit`、`rate_limit_buckets` と索引・制約を追加した。通報作成、共有rate limit、管理一覧、作品moderation、通報状態変更を固定search pathのexecute-only関数にし、値のallow-list、現在のactor/admin、expected version、冪等性を関数内でも再確認する。OTP送信はsubject単位のtransaction advisory lockで空行競合を閉じる。復帰確認の専用関数は、送信元全体30回/600秒、宛先全体30回/600秒、宛先＋送信元の組5回/600秒を1 transactionで決定的にlockして判定し、組の枯渇時は組だけ、広域軸の枯渇時は該当軸だけを更新して他のbucketを作らない。三つの復帰actionは汎用関数のallow-listから外し、専用関数との競合更新を防いだ。汎用関数の確認actionはメール追加用 `otp_verify_link` だけである。期限切れbucketは `expires_at` 索引から最大100件を `SKIP LOCKED` で回収する。
+
+: 通常BFF `emanowa_app` と管理BFF `emanowa_admin_app` は別secret・別poolとし、private tableの直接権限や相互の関数権限を持たせない。`emanowa_admin_provisioner` は管理者台帳の必要列だけ、`emanowa_owner` はobject所有だけに限定し、両者を常時 `NOLOGIN` とする。限定4ロールの親membershipもmigrationで除去し、`SET ROLE` 経路を閉じた。migration secretはruntime設定から除外した。`ADMIN_DATABASE_URL`、`RATE_LIMIT_HMAC_SECRET`、`TRUSTED_PROXY_HOPS` を設定契約へ追加し、公開環境は不足・不正値をfail closedにする。developmentでもHMAC secretは必須とした。
+
+検証した経路と結果:
+: Node.js `24.17.0`、pnpm `11.25.0`で `pnpm check` が成功し、Prettier、ESLint、TypeScript、Vitest 45ファイル322件がすべて成功した。Next.js `16.4.3`のproduction buildも成功し、`.next/static`、公開HTML/RSCへ通常/admin/migration DB、service role、rate-limit秘密が含まれないことを確認した。
+
+: クリーンDBから `pnpm test:stage-f` を実行し、段階B context 2件・private schema 48件、段階C 58件、段階D 48件、段階E 30件、段階F 74件、合計260件のpgTAPが成功した。`app_private` のDB lintはwarningも失敗扱いで問題0件だった。段階B〜EのAuth、所有権、同時投稿、本人管理、地図、共有、招待回帰もすべて成功した。
+
+: 2つのproduction Next.js instanceへ交互・並行に要求し、作成・編集・通報・画像・OTP送信/確認の共有上限、画像31件並行時の許可30・拒否1とDB count 31、OTP送信の連続60秒予約、復帰確認の同一宛先＋送信元で6件目の429、同一送信元で宛先を切り替えた31件目の429、送信元を切り替えても同一宛先では31件目の429、別の宛先と送信元の独立性、拒否時の保存内容・version/Auth不変を確認した。DB bucketも照合し、組の枯渇では組だけ、送信元全体・宛先全体の枯渇では該当する広域軸だけが更新され、ローテーションした新しい組や他軸を作らないこと、汎用関数が復帰actionを拒否することを確認した。IPv6の同値な圧縮・展開表記とIPv4-mapped IPv6も同じ送信元subjectになることを確認した。rate-limit関数のEXECUTEを一時revokeした状態では公開JSONを読める一方、変更要求は503で保存せず、grant復旧後に再開した。
+
+: 実ローカルSupabase Authで確認済み登録ユーザーへTOTPをenroll・challenge・verifyし、SSR CookieのAAL2 sessionだけが管理APIを利用できた。未認証、一般利用者、AAL1、有効台帳にないAAL2、無効化直後の管理者は拒否された。CLIのenable、disable直後403、再enableを確認し、remote TLS未指定・重複`sslmode`・host/timeout query上書きの接続前拒否も試験した。
+
+: 通報201・同一key/別keyの並行収束・冪等再送・未解決重複集約、危険なHTML文字列のplain-text応答、自動非表示なし、管理一覧への通報者UID・owner-only本文・内部ID非露出を確認した。hideの異なるkeyによる並行version競合、restore/deleteと通報解決、冪等競合、公開詳細/一覧/random/nearby/chunk/HTML/RSC/metadata/OG/正方形PNGの即時反映、監査への本文非保存とhide監査1件を実endpointとDBで確認した。Next.jsのRSC not-foundはHTTP 200のsoft-404もあるため、Flightの `NEXT_HTTP_ERROR_FALLBACK;404` とUGC非含有を検証した。
+
+実行していない検証と理由:
+: cloud Supabase、stagingドメイン、CDN/reverse proxy、Turnstile、SMTP、本番MFA factorは未接続のため、実Supavisor、providerのDB SSL enforcement、実header chainの `TRUSTED_PROXY_HOPS`、cloud複数instance、Auth/provider側rate limit、メール到達性、CDNの非保持は未確認。必要な設定と確認表は `docs/stage-f-setup.md` に記録した。
+
+: 360/390/768/1440px、実認証アプリでのTOTP QR、dialog focus、キーボード、スクリーンリーダー、代表端末での視覚確認は未実施。CSS、ARIA、focus経路、React hooks、秘密状態の保持境界は静的監査済みだが、stagingと実機で最終確認が必要。
+
+: 管理当番、問い合わせ先、一次対応時間、違法・緊急内容のエスカレーション、backup復旧後の再非公開化、管理者factor復旧は公開前の運用合意が必要。リポジトリでは受付停止、台帳即時無効化、migration/アプリrole分離の手順まで整備した。
+
+仕様からの変更と理由:
+: P0の意味の変更はない。共有bucketを正本にするfail-closed制限、OTPの連続60秒予約と限定rollback、fresh Auth・AAL2・DB台帳・専用接続を積にする管理権限、通報と作品moderationの分離は `docs/decisions.md` のADR-F-001〜003へ記録した。作成等の固定時間窓試験はPNG生成時間で境界を跨がないよう、実画像1件とrate判定後に404となるfixtureを組み合わせ、製品制限値は変更していない。
+
+既知の問題・外部設定が必要な項目:
+: `RATE_LIMIT_HMAC_SECRET`、正確な `TRUSTED_PROXY_HOPS`、通常/admin DB secret、migration/DBA接続、管理者Auth UUID、Turnstile、SMTP、運営者情報、問い合わせ先は環境ごとに設定が必要。設定不足時は変更要求を拒否し、process内Map、demo、通常DB接続、AAL1へフォールバックしない。
+
+: 実providerで管理者をbanする場合はAuthだけでなく管理者台帳もdisableし、unbanだけで管理権限を復帰させない。通常/adminアプリroleだけをprovisioning時にLOGIN化し、owner/provisionerへ資格情報を与えない。remoteの管理CLIはTLSとquery allow-listを満たすmigration/DBA endpointだけを使う。
+
+次に実装する段階:
+: 段階G「品質と障害回復」。全試験表、ブラウザー性能・アクセシビリティ、ネットワーク切断・再送・認証切替・DB/Auth障害、backup/restoreを含む回復経路を検証する。

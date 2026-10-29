@@ -8,6 +8,7 @@ import { worldLocationHref } from "@/components/world/map-contracts";
 import { publicEmaSchema, type PublicEma } from "@/domain/schemas";
 
 import { EmaSharePanel } from "./ema-share-panel";
+import { EmaReportPanel } from "./ema-report-panel";
 
 const DETAIL_REFRESH_MILLISECONDS = 30_000;
 
@@ -30,9 +31,13 @@ function publicEmaFromBody(value: unknown): PublicEma | null {
 export function EmaDetailLive({
   initialEma,
   configuredOrigin,
+  captchaSiteKey,
+  captchaRequired,
 }: {
   initialEma: PublicEma;
   configuredOrigin: string | null;
+  captchaSiteKey: string | null;
+  captchaRequired: boolean;
 }) {
   const [ema, setEma] = useState<PublicEma | null>(initialEma);
   const [refreshMessage, setRefreshMessage] = useState("");
@@ -156,6 +161,12 @@ export function EmaDetailLive({
             </p>
             <div className="action-row">
               <EmaSharePanel ema={ema} configuredOrigin={configuredOrigin} />
+              <EmaReportPanel
+                worldSlug={ema.worldSlug}
+                publicId={ema.publicId}
+                captchaSiteKey={captchaSiteKey}
+                captchaRequired={captchaRequired}
+              />
               <Link
                 className="button button--secondary"
                 href={worldLocationHref(ema.worldSlug, ema.x, ema.y)}
