@@ -149,6 +149,39 @@ function parseHttpUrl(
   }
 }
 
+function parseHttpOrigin(
+  source: EnvironmentSource,
+  key: string,
+  issues: ConfigurationIssue[],
+): string | null {
+  const raw = value(source, key);
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw);
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      throw new Error("not an origin");
+    }
+    return parsed.origin;
+  } catch {
+    issues.push({
+      key,
+      code: "invalid",
+      severity: "error",
+      message:
+        "userinfo・path・query・fragmentを含まないhttp/https originを指定してください。",
+    });
+    return null;
+  }
+}
+
 function parseDatabaseUrl(
   source: EnvironmentSource,
   key: string,
@@ -247,7 +280,7 @@ export function parseServerEnvironment(
 ): ServerRuntimeConfig {
   const issues: ConfigurationIssue[] = [];
   const environment = parseEnvironment(source, issues);
-  const appOrigin = parseHttpUrl(source, "APP_ORIGIN", issues);
+  const appOrigin = parseHttpOrigin(source, "APP_ORIGIN", issues);
   const supabaseUrl = parseHttpUrl(source, "NEXT_PUBLIC_SUPABASE_URL", issues);
   const supabasePublishableKey = value(
     source,

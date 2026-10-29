@@ -2,7 +2,7 @@
 
 みんなの願いが集まる、日本語のオンライン絵馬サービスです。
 
-P0 の段階D「地図と探索」まで実装済みです。段階Cまでの投稿・本人管理・メール復帰に加え、100万枠を全件取得しないCanvas地図、疎な集計と20×20チャンク、公開一覧、番号移動、ランダム訪問、自分の絵馬への移動を用意しています。
+P0 の段階E「共有と近くへの招待」まで実装済みです。段階Dまでの投稿・本人管理・Canvas地図・公開探索に加え、安定した個別URL、OG/正方形PNG、X/LINE共有、URLコピー、最大8件の近隣候補、別ブラウザーからの招待投稿を用意しています。
 
 ## 必要な環境
 
@@ -39,7 +39,7 @@ pnpm db:reset
 pnpm db:local-role
 ```
 
-最後のコマンドが表示するローカル専用 `DATABASE_URL` と、`pnpm exec supabase status --output env` のAPI URL / publishable keyを `.env.local` に設定します。詳しい値、cloud設定、限定roleの作り方は [docs/stage-b-setup.md](docs/stage-b-setup.md)、メールOTPと段階Cの確認方法は [docs/stage-c-setup.md](docs/stage-c-setup.md)、地図・探索の確認方法は [docs/stage-d-setup.md](docs/stage-d-setup.md) にあります。
+最後のコマンドが表示するローカル専用 `DATABASE_URL` と、`pnpm exec supabase status --output env` のAPI URL / publishable keyを `.env.local` に設定します。詳しい値、cloud設定、限定roleの作り方は [docs/stage-b-setup.md](docs/stage-b-setup.md)、メールOTPと段階Cの確認方法は [docs/stage-c-setup.md](docs/stage-c-setup.md)、地図・探索は [docs/stage-d-setup.md](docs/stage-d-setup.md)、共有・招待は [docs/stage-e-setup.md](docs/stage-e-setup.md) にあります。
 
 停止するときは次を実行します。
 
@@ -67,7 +67,7 @@ pnpm supabase:stop
 
 Supabase を接続するときは、プロジェクトの Connect 画面から URL と publishable key を取得します。匿名サインインとmanual linkingを有効にし、SSRは `@supabase/ssr` のCookie方式で構成します。`DATABASE_URL` はtransaction poolerの `emanowa_app` に限定され、`postgres`、テーブル所有者、`BYPASSRLS`、`service_role` は設定検証で拒否します。migration接続とは分離してください。staging/productionではCAPTCHA site/secret設定が揃わない匿名登録をfail closedにします。
 
-## 段階DまでのAPI
+## 段階EまでのAPI
 
 現在の同一オリジンBFFは次を実装しています。公開概要だけは内容を持たない集計として共有キャッシュ最大30秒、それ以外の公開・本人応答は `no-store` です。
 
@@ -78,6 +78,9 @@ Supabase を接続するときは、プロジェクトの Connect 画面から U
 - `GET /api/v1/worlds/{slug}/emas?limit=&cursor=&category=`: public/activeだけの新着一覧。既定24・最大50件の厳格keyset cursor
 - `GET /api/v1/worlds/{slug}/emas/random?category=`: public/activeだけを索引付きで1件探索。対象なしは `item:null`
 - `GET /api/v1/worlds/{slug}/emas/{publicId}`: public/unlistedの正確なURLによる公開投影。owner-only本文は常に `null`
+- `GET /api/v1/worlds/{slug}/emas/{publicId}/image?variant=og|square`: 公開投影だけを描画する1200×630または1080×1080 PNG
+- `GET /api/v1/worlds/{slug}/nearby?near={publicId}`: 招待元の近隣から最大8件の未予約候補
+- `GET /api/v1/worlds/{slug}/nearby?x={0..999}&y={0..999}`: 指定座標の近隣候補。`near` との混在は拒否
 - `POST /api/v1/worlds/{slug}/emas`: 検証済みUID、厳密入力、Idempotency-Key、同一transactionで原子的に作成
 - `GET /api/v1/me/emas?world={slug}`: 検証済み本人だけの原本文
 - `PATCH /api/v1/me/emas/{publicId}`: 本人だけの部分更新、expectedVersion、Idempotency-Key
@@ -102,13 +105,13 @@ pnpm test
 pnpm build
 ```
 
-Docker上の実DB/Authと段階Dの密集地図fixtureを含む検証は、Supabase起動後に実行します。
+Docker上の実DB/Authと段階Eの共有・招待fixtureを含む検証は、Supabase起動後に実行します。
 
 ```bash
-pnpm test:stage-d
+pnpm test:stage-e
 ```
 
-`test:stage-d` は段階B/Cの回帰に加え、DB reset、全pgTAP、公開1,000件・1チャンク400件のfixture、20/100集計、チャンクrevisionと応答量、公開範囲、一覧cursor、ランダム訪問、公開GETのCookie非発行、本番サーバー経由の応答時間をまとめて確認します。段階Cまでは `pnpm test:stage-c`、段階Bだけは `pnpm test:stage-b`、DB契約だけは `pnpm test:db` で再実行できます。
+`test:stage-e` は段階B〜Dの回帰に加え、DB reset、全pgTAP、nearbyの境界と順序、OG/正方形PNGの寸法、公開範囲、同じ画像URLの更新、別Cookieの招待投稿、枠・所有者競合、公開GETのCookie非発行をproduction serverで確認します。段階Dまでは `pnpm test:stage-d`、段階Cまでは `pnpm test:stage-c`、段階Bだけは `pnpm test:stage-b`、DB契約だけは `pnpm test:db` で再実行できます。
 
 静的検証をまとめて実行する場合は次を使います。
 
@@ -139,8 +142,9 @@ pnpm demo:clear
 - cloud SupabaseでのSMTP到達性、CAPTCHA、stagingドメインのCookie/OTP E2Eは、実project設定後の確認が必要です
 - 複数タブの所有者切替競合を防ぐため、投稿・本人取得/更新/削除・メール追加/復帰要求・OTP検証・ログアウトにはWeb Locks対応ブラウザーが必要です。未対応時は安全側で操作を拒否します
 - Canvasのタッチ・ピンチ、キーボード、スクリーンリーダー、360/390/768/1440pxの視覚確認と、密集地図を10秒移動した30fps目標は実ブラウザー・実機での最終確認が必要です
+- 実X/LINEアプリでの送信、SNS crawlerのOG表示、Clipboard/画像保存、360/390/768/1440px、キーボード、スクリーンリーダーは、stagingと代表端末での最終確認が必要です
+- provider-neutralな計測eventは実装済みですが、本番analytics collectorは未設定です。本文・表示名・メール・公開ID・URL・認証情報を送らない接続が必要です
 - 共有レート制限、通報、管理者の非表示・復帰は段階Fで接続します
-- 共有画像と近くへの招待は段階Eです
 - P1/P2 のグループ、成就、課金は機能フラグを含め既定で無効です
 
 実装状況と検証記録は [docs/implementation-status.md](docs/implementation-status.md)、仕様判断は [docs/decisions.md](docs/decisions.md) を参照してください。仕様の正本は [docs/spec/emanowa_spec_v1/00_README.md](docs/spec/emanowa_spec_v1/00_README.md) から始まります。

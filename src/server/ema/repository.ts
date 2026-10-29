@@ -10,6 +10,7 @@ import {
   createEmaInputSchema,
   deleteEmaInputSchema,
   idempotencyKeySchema,
+  nearbyQuerySchema,
   overviewCellSizeSchema,
   publicIdSchema,
   updateEmaInputSchema,
@@ -24,6 +25,7 @@ import { getServerRuntimeConfig } from "@/server/config";
 import {
   queryCreateEma,
   queryDeleteEma,
+  queryNearbySlots,
   queryOwnerEma,
   queryOwnerWorlds,
   queryPublicChunk,
@@ -40,6 +42,7 @@ import {
   mapCreateEmaRow,
   mapListedPublicEmaRow,
   mapMutationEmaRow,
+  mapNearbyRows,
   mapOwnerEmaRow,
   mapOwnerWorldRow,
   mapPublicChunkRows,
@@ -217,6 +220,20 @@ export async function getRandomPublicEma(
     );
     return row ? mapListedPublicEmaRow(row) : null;
   });
+}
+
+export async function getNearbySlots(
+  worldSlugInput: string,
+  queryInput: unknown,
+) {
+  const worldSlug = worldSlugSchema.parse(worldSlugInput);
+  const query = nearbyQuerySchema.parse(queryInput);
+  const publicLookupId = "near" in query ? query.near : null;
+  const rows = await withDatabaseTransaction(
+    { actorId: null, publicLookupId },
+    (client) => queryNearbySlots(client, worldSlug, query),
+  );
+  return mapNearbyRows(rows);
 }
 
 export async function getOwnerEma(

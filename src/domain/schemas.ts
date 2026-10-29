@@ -513,6 +513,72 @@ export const nearbyQuerySchema = z
     }
   });
 
+export const nearbyCandidateSchema = z
+  .object({
+    x: xCoordinateSchema,
+    y: yCoordinateSchema,
+    slotNumber: slotNumberSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.slotNumber !== toSlotNumber(value.x, value.y)) {
+      context.addIssue({
+        code: "custom",
+        path: ["slotNumber"],
+        message: "座標と表示番号が一致しません",
+      });
+    }
+  });
+
+export const nearbyResponseSchema = z
+  .object({
+    origin: z.object({ x: xCoordinateSchema, y: yCoordinateSchema }).strict(),
+    candidates: z.array(nearbyCandidateSchema).max(8),
+    searchedRadius: z.union([z.literal(3), z.literal(8), z.literal(20)]),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const seen = new Set<number>();
+    let previous: { distanceSquared: number; slotNumber: number } | undefined;
+
+    for (const [index, candidate] of value.candidates.entries()) {
+      const dx = candidate.x - value.origin.x;
+      const dy = candidate.y - value.origin.y;
+      const chebyshevDistance = Math.max(Math.abs(dx), Math.abs(dy));
+      const distanceSquared = dx * dx + dy * dy;
+
+      if (chebyshevDistance > value.searchedRadius) {
+        context.addIssue({
+          code: "custom",
+          path: ["candidates", index],
+          message: "探索半径外の候補です",
+        });
+      }
+      if (seen.has(candidate.slotNumber)) {
+        context.addIssue({
+          code: "custom",
+          path: ["candidates", index],
+          message: "同じ候補が重複しています",
+        });
+      }
+      if (
+        previous &&
+        (distanceSquared < previous.distanceSquared ||
+          (distanceSquared === previous.distanceSquared &&
+            candidate.slotNumber < previous.slotNumber))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["candidates", index],
+          message: "候補の並び順が正しくありません",
+        });
+      }
+
+      seen.add(candidate.slotNumber);
+      previous = { distanceSquared, slotNumber: candidate.slotNumber };
+    }
+  });
+
 export const ownerWorldSummarySchema = z
   .object({
     worldSlug: worldSlugSchema,
@@ -611,6 +677,8 @@ export type UpdateEmaInput = z.infer<typeof updateEmaInputSchema>;
 export type DeleteEmaInput = z.infer<typeof deleteEmaInputSchema>;
 export type CreateReportInput = z.infer<typeof createReportInputSchema>;
 export type NearbyQuery = z.infer<typeof nearbyQuerySchema>;
+export type NearbyCandidate = z.infer<typeof nearbyCandidateSchema>;
+export type NearbyResponse = z.infer<typeof nearbyResponseSchema>;
 export type OwnerWorldSummary = z.infer<typeof ownerWorldSummarySchema>;
 export type MutationReceipt = z.infer<typeof mutationReceiptSchema>;
 export type ReportReceipt = z.infer<typeof reportReceiptSchema>;

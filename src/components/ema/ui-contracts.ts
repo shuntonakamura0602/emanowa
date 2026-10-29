@@ -1,14 +1,16 @@
 import {
   createEmaInputSchema,
+  ownerEmaSchema,
   type ApiError,
   type ApiErrorCode,
   type Category,
   type CreateEmaInput,
   type MessageVisibility,
   type MutationReceipt,
+  type PublicEma,
   type Visibility,
 } from "@/domain/schemas";
-import { fromSlotNumber } from "@/domain/coordinates";
+import { fromSlotNumber, toSlotNumber } from "@/domain/coordinates";
 
 export const CATEGORY_OPTIONS: readonly {
   value: Category;
@@ -43,6 +45,23 @@ export type StoredEmaDraft = {
 export type FieldErrors = Partial<
   Record<keyof EmaDraft | "request" | "idempotencyKey", string>
 >;
+
+export type InviteStatus =
+  "ready" | "unavailable" | "no_candidates" | "world_full" | "not_accepting";
+
+export type InviteContext = {
+  nearPublicId: string | null;
+  source: PublicEma | null;
+  origin: { x: number; y: number } | null;
+  candidates: readonly { x: number; y: number; slotNumber: number }[];
+  searchedRadius: 3 | 8 | 20 | null;
+  status: InviteStatus;
+};
+
+export type ExistingOwnerEma = {
+  publicId: string;
+  status: "active" | "hidden";
+};
 
 export const EMPTY_DRAFT: EmaDraft = {
   wishText: "",
@@ -184,6 +203,50 @@ export function applyInitialSlotNumber(
     idempotencyKey: null,
     idempotencyPayload: null,
   };
+}
+
+export function initialSlotNumberFromLocationQuery(query: {
+  near?: string | string[];
+  x?: string | string[];
+  y?: string | string[];
+}): number | null {
+  // An invite only offers candidates. It never chooses or reserves one for the
+  // visitor, and its presence deliberately suppresses direct coordinates.
+  if (query.near !== undefined) return null;
+  if (
+    typeof query.x !== "string" ||
+    typeof query.y !== "string" ||
+    !/^\d+$/u.test(query.x) ||
+    !/^\d+$/u.test(query.y)
+  ) {
+    return null;
+  }
+
+  const x = Number(query.x);
+  const y = Number(query.y);
+  try {
+    return toSlotNumber(x, y);
+  } catch {
+    return null;
+  }
+}
+
+/** Reduce the private owner response immediately to the minimum state needed
+ * by the invite guard. The wish text is never retained in component state. */
+export function existingOwnerEmaFromResponse(
+  value: unknown,
+  worldSlug: string,
+): ExistingOwnerEma | null | undefined {
+  if (!value || typeof value !== "object" || !("ema" in value)) {
+    return undefined;
+  }
+  const ema = (value as { ema?: unknown }).ema;
+  if (ema === null) return null;
+  const parsed = ownerEmaSchema.safeParse(ema);
+  if (!parsed.success || parsed.data.worldSlug !== worldSlug) {
+    return undefined;
+  }
+  return { publicId: parsed.data.publicId, status: parsed.data.status };
 }
 
 export function isExpectedOwnerPublicId(

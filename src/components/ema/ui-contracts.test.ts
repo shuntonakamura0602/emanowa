@@ -6,6 +6,8 @@ import {
   canonicalCreatePayload,
   createInputFromDraft,
   draftStorageKey,
+  existingOwnerEmaFromResponse,
+  initialSlotNumberFromLocationQuery,
   isExpectedOwnerPublicId,
   isMutationReceipt,
   messageForApiError,
@@ -105,6 +107,27 @@ describe("段階Cの作成フォーム契約", () => {
       idempotencyKey: null,
       idempotencyPayload: null,
     });
+  });
+
+  it("nearを座標より優先し、招待候補を本人の代わりに選ばない", () => {
+    expect(
+      initialSlotNumberFromLocationQuery({
+        near: "550e8400-e29b-41d4-a716-446655440000",
+        x: "9",
+        y: "8",
+      }),
+    ).toBeNull();
+    expect(
+      initialSlotNumberFromLocationQuery({
+        near: ["550e8400-e29b-41d4-a716-446655440000"],
+        x: "9",
+        y: "8",
+      }),
+    ).toBeNull();
+    expect(initialSlotNumberFromLocationQuery({ x: "9", y: "8" })).toBe(8010);
+    expect(
+      initialSlotNumberFromLocationQuery({ x: "1000", y: "8" }),
+    ).toBeNull();
   });
 
   it("編集URLを指定した場合は所有者DTOのpublicIdが一致するときだけ許可する", () => {
@@ -232,5 +255,41 @@ describe("段階Cの応答・エラー表示契約", () => {
     expect(isMutationReceipt(receipt)).toBe(true);
     expect(isMutationReceipt({ ...receipt, publicId: "unsafe" })).toBe(false);
     expect(isMutationReceipt({ ...receipt, version: 0 })).toBe(false);
+  });
+
+  it("本人応答は招待ガードに必要な識別子と状態だけへ縮小する", () => {
+    const ownerEma = {
+      publicId: "550e8400-e29b-41d4-a716-446655440000",
+      worldSlug: "2027",
+      x: 0,
+      y: 0,
+      slotNumber: 1,
+      nickname: "本人",
+      category: "other",
+      designId: "basic_wood",
+      visibility: "public",
+      messageVisibility: "owner_only",
+      wishText: "クライアント状態へ残さない本文",
+      status: "active",
+      version: 1,
+      createdAt: "2026-10-28T00:00:00Z",
+      updatedAt: "2026-10-28T00:00:00Z",
+      capabilities: {
+        editContent: true,
+        visibilityMode: "all",
+        delete: true,
+      },
+    };
+    expect(existingOwnerEmaFromResponse({ ema: ownerEma }, "2027")).toEqual({
+      publicId: ownerEma.publicId,
+      status: "active",
+    });
+    expect(existingOwnerEmaFromResponse({ ema: null }, "2027")).toBeNull();
+    expect(existingOwnerEmaFromResponse({ ema: ownerEma }, "2028")).toBe(
+      undefined,
+    );
+    expect(existingOwnerEmaFromResponse({ unsafe: ownerEma }, "2027")).toBe(
+      undefined,
+    );
   });
 });

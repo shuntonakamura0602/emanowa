@@ -1,6 +1,6 @@
 # 実装状況
 
-更新日: 2026-10-28
+更新日: 2026-10-29
 
 ## 段階A — 土台と契約
 
@@ -191,3 +191,54 @@ DB migration / 設定変更:
 
 次に実装する段階:
 : 段階E「共有と近くへの招待」。既存の個別URLと地図位置を基に、公開投影だけを使うOG/共有PNG、共有入口、最大20枠の近隣候補を実装する。
+
+## 段階E — 共有と近くへの招待
+
+対象段階:
+: P0 段階E「共有と近くへの招待」（実装・ローカルDB/Auth/HTTP/画像統合検証完了）
+
+実装した体験:
+: 安定した個別URLへ、共有内容を事前確認できるdialog、X Web Intent、LINE共有画面、通常/招待URLコピー、Clipboard拒否時の選択欄、正方形PNG保存を追加した。共有先を選んだ時点では「投稿/送信画面を開いた」とだけ案内し、自動投稿や完了表示をしない。共有文章には願い本文を自動挿入せず、設定済みoriginと固定pathだけからURLを作る。
+
+: 個別ページへcanonical、OG、Twitter metadataを追加し、1200×630のOGと1080×1080の保存用PNGを実装した。公開投影だけをrendererへ渡し、`owner_only`本文は固定文にする。public/unlistedからowner-only/hidden/deletedへ変化した場合に古い画像を返さないよう、描画前後でversionを照合して再描画または404/503にする。詳細と招待元は30秒間隔・タブ復帰時に公開状態を再取得し、縮小・削除・確認失敗時は旧本文をfail-privateで隠す。
+
+: 静的CFF版Noto Sans JPをOFL・出典・SHA-256付きで同梱し、実行時の外部font/emoji CDNを不要にした。80書記素と改行を切り捨てず、OGは20字×4行、正方形は16字×5行へ収める。外部emoji fontがなくても生成を失敗させず文字を黙って消さないため、画像内だけemoji graphemeを`◇`と凡例へ決定的に置き換える。
+
+: `/api/v1/worlds/{slug}/nearby` と非公開DB関数を追加した。正確なpublic/unlisted招待元または座標の周囲をChebyshev半径3、8、20の順で最大41×41だけ調べ、空き候補を最大8件、距離二乗・表示番号順で返す。候補は予約せず自動選択せず、本人が選ぶ。保存時は既存の原子的制約で空きと年1枚を再確認し、`SLOT_TAKEN` は下書きを残して候補を再取得する。
+
+: 招待landingは閲覧だけでAuthやCookieを作らず、入力/確定の明示操作後にだけ匿名Authを作る。既に同年の絵馬があるsessionでは本人APIの最小状態だけを読み二枚目を止める。無効、hidden、deleted、別world、候補0件、満杯、受付停止を有限表示し、成功後は招待元と自分の2点を同じ地図で確認できる。
+
+: P0の7計測点をprovider-neutralな`emanowa:measurement` eventへ接続した。runtime allow-listでpayloadを再構築し、年、共有先、通常/招待の区別以外を除去するため、本文、表示名、メール、公開ID、URL、token、Cookieを分析eventへ渡さない。未接続やlistener失敗は主操作を止めない。
+
+主な変更ファイル:
+: `supabase/migrations/20261029024520_stage_e_sharing_nearby.sql`、`20261029030052_stage_e_world_lock_policy.sql`、`supabase/tests/database/stage_e_sharing_nearby.test.sql`、`src/app/api/v1/worlds/[slug]/nearby/`、`emas/[id]/image/`、`src/server/share/`、`src/components/ema/ema-share-panel.tsx`、`ema-detail-live.tsx`、`new-ema-flow.tsx`、`src/components/analytics/public-measurement.ts`、`assets/fonts/`、`scripts/stage-e-integration.mjs`、`docs/stage-e-setup.md`
+
+DB migration / 設定変更:
+: `get_nearby_slots` は `app_private`、固定search path、`STABLE SECURITY DEFINER`、`NOBYPASSRLS`所有者とし、EXECUTEは`emanowa_app`だけへ付与した。unlistedはtransaction-localの正確なlookup UUIDだけで解決し、hidden/deleted/別worldを返さない。`create_ema`の`SELECT ... FOR SHARE`がFORCE RLS下でworld行を取得するために必要な`worlds_owner_update_lock` policyを追加した。通常BFF roleはworld tableを直接更新できず、所有者roleは通常`NOLOGIN`のままである。
+
+: 新しい秘密値や外部サービスは追加していない。`APP_ORIGIN` はuserinfo、path、query、fragmentを含まないbare HTTP(S) originだけを受理するよう強化した。共有画像fontは `NotoSansJP-Regular.otf`、SHA-256 `dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073` で固定した。
+
+検証した経路と結果:
+: Node.js `24.17.0`、pnpm `11.25.0`で `pnpm check` が成功し、Prettier、ESLint、TypeScript、Vitest 32ファイル223件がすべて成功した。Next.js `16.4.3`のproduction buildも成功した。画像renderer単体でOGは577ms、正方形は288msのローカル実行で正しいPNG寸法を返した。これは初回ローカル値であり本番性能保証ではない。
+
+: クリーンDBから `pnpm test:stage-e` を実行し、段階B context 2件・private schema 48件、段階C 58件、段階D 48件、段階E 30件、合計186件のpgTAPが成功した。DB lint、段階B〜DのAuth/HTTP/同時投稿回帰も成功し、異なるUIDの同一枠100件は成功1件・`SLOT_TAKEN`99件だった。試験専用world UPDATE policyを削除しても投稿が成功し、恒久RLS policyを実際に通ることを確認した。
+
+: 段階Eproduction server統合ではnearbyの厳格query、最大8件・順序・半径、public/unlisted/owner-only/hidden/deleted/別world、HTML・RSC・metadata・画像、`no-store`、検索抑止、Cookie非発行、Authユーザー不増を確認した。同じ画像URLを公開縮小・削除後に再取得して古い本文/bytesを返さないこと、別Cookieの招待→明示匿名Auth→投稿→同world内2点、年1枚、同一候補2人の成功1件・`SLOT_TAKEN`1件も成功した。
+
+: 80書記素、日本語、改行、絵文字を実endpointでOG/正方形PNGへ生成し、signature/IHDRを自動確認した。原寸画像を目視して本文、カード、footerに枠外表示・clip・文字欠けがないこと、emoji markerと凡例が表示されることも確認した。
+
+実行していない検証と理由:
+: cloud Supabase、stagingドメイン、CDN、実X/LINEアプリ、SNS crawler、analytics collectorは未接続のため、実Supavisor、CDNの`no-store`/`X-Robots-Tag`、OG展開、実投稿/送信画面、collectorへのevent送信は未確認。設定・確認手順は `docs/stage-e-setup.md` に記録した。
+
+: 360/390/768/1440px、実iOS/AndroidのClipboard拒否・画像保存・LINE/X WebView、dialog focus、キーボード、スクリーンリーダーの実機確認は未実施。レスポンシブCSS、44px操作領域、label、live region、focus経路、React hooksは静的監査済みだが、代表端末での最終確認が必要。
+
+仕様からの変更と理由:
+: P0の意味の変更はない。emojiは画像生成の外部依存と全体失敗を避けるため画像内だけ明示markerへ置換し、原文は変更しない。公開画像、近隣候補、計測境界の判断は `docs/decisions.md` のADR-E-001〜003へ記録した。
+
+既知の問題・外部設定が必要な項目:
+: 実SNS/collector/cloud設定は未設定。X/LINE clickを投稿/送信完了として計測しない。実collector接続時もallow-list外の本文、表示名、メール、公開ID、URL、token、Cookieを送らない監査が必要。
+
+: 共有レート制限、通報、運営による非表示・復帰、監査記録は段階F、ブラウザー性能・障害回復の全試験表は段階G、公開環境のCDN/監視/バックアップは段階Hで扱う。
+
+次に実装する段階:
+: 段階F「通報・運用・不正利用対策」。通報、管理者の非表示・復帰、監査記録、複数instanceで共有するrate limit、CAPTCHA運用を実装する。

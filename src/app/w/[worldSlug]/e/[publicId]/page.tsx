@@ -1,33 +1,115 @@
-import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 
-import {
-  EmaShape,
-  PageIntro,
-  StageCard,
-  WorldBreadcrumb,
-} from "@/components/site-shell";
-import { worldLocationHref } from "@/components/world/map-contracts";
+import { EmaDetailLive } from "@/components/ema/ema-detail-live";
+import { emaCanonicalPath } from "@/components/ema/share-contracts";
+import { WorldBreadcrumb } from "@/components/site-shell";
 import { getWorldConfig } from "@/config/worlds";
 import { publicIdSchema } from "@/domain";
+import { getServerRuntimeConfig } from "@/server/config";
 import { getPublicEma } from "@/server/ema/repository";
 
 export const dynamic = "force-dynamic";
 
-const CATEGORY_LABELS = {
-  family: "家族",
-  health: "健康",
-  study: "学び・合格",
-  work: "仕事",
-  love: "恋愛・ご縁",
-  challenge: "挑戦",
-  other: "その他",
-} as const;
+type PageParams = Promise<{ worldSlug: string; publicId: string }>;
+
+const readPublicEma = cache(async (worldSlug: string, publicId: string) =>
+  getPublicEma(worldSlug, publicId),
+);
+
+function imagePath(
+  worldSlug: string,
+  publicId: string,
+  variant: "og" | "square",
+): string {
+  return `/api/v1/worlds/${encodeURIComponent(worldSlug)}/emas/${encodeURIComponent(publicId)}/image?variant=${variant}`;
+}
+
+function absoluteSiteUrl(path: string): URL {
+  const origin = getServerRuntimeConfig().appOrigin ?? "http://localhost:3000";
+  return new URL(path, origin);
+}
+
+async function resolveEma(params: PageParams) {
+  const { worldSlug, publicId } = await params;
+  if (
+    !getWorldConfig(worldSlug) ||
+    !publicIdSchema.safeParse(publicId).success
+  ) {
+    return null;
+  }
+  return readPublicEma(worldSlug, publicId);
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: PageParams;
+}): Promise<Metadata> {
+  const ema = await resolveEma(params);
+  if (!ema) {
+    return {
+      title: "絵馬が見つかりません",
+      robots: { index: false, follow: false, noarchive: true },
+    };
+  }
+
+  const title = `${ema.nickname ?? "ななしさん"}の絵馬`;
+  const description =
+    ema.messageText === null
+      ? `${ema.worldSlug}年のえまのわに掛けられた、本文をひみつにした絵馬です。`
+      : ema.messageText;
+  const canonicalUrl = absoluteSiteUrl(
+    emaCanonicalPath(ema.worldSlug, ema.publicId),
+  );
+  const imageUrl = absoluteSiteUrl(
+    imagePath(ema.worldSlug, ema.publicId, "og"),
+  );
+
+  return {
+    title,
+    description,
+    alternates: { canonical: canonicalUrl },
+    openGraph: {
+      type: "website",
+      locale: "ja_JP",
+      siteName: "えまのわ",
+      title,
+      description,
+      url: canonicalUrl,
+      images: [
+        {
+          url: imageUrl,
+          width: 1200,
+          height: 630,
+          alt: `${ema.worldSlug}年のえまのわの絵馬`,
+        },
+      ],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [imageUrl],
+    },
+    ...(ema.visibility === "unlisted"
+      ? {
+          robots: {
+            index: false,
+            follow: false,
+            noarchive: true,
+            noimageindex: true,
+          },
+        }
+      : {}),
+  };
+}
 
 export default async function EmaDetailPage({
   params,
 }: {
-  params: Promise<{ worldSlug: string; publicId: string }>;
+  params: PageParams;
 }) {
   const { worldSlug, publicId } = await params;
   if (
@@ -36,63 +118,16 @@ export default async function EmaDetailPage({
   ) {
     notFound();
   }
-  const ema = await getPublicEma(worldSlug, publicId);
+  const ema = await readPublicEma(worldSlug, publicId);
   if (!ema) notFound();
 
   return (
     <section className="container page-section">
       <WorldBreadcrumb worldSlug={worldSlug} current="絵馬の詳細" />
-      <PageIntro eyebrow={worldSlug + "年"} title="絵馬の詳細">
-        <p>
-          {ema.visibility === "unlisted"
-            ? "この絵馬は、リンクを知っている人だけが開けます。リンクは転送されることがあります。"
-            : "みんなの願いが集まる、えまのわの絵馬です。"}
-        </p>
-      </PageIntro>
-
-      <div className="detail-layout">
-        <StageCard title={ema.nickname ?? "ななしさん"} tone="warm">
-          <EmaShape label={`${ema.nickname ?? "ななしさん"}の絵馬`}>
-            <span>
-              {ema.messageText === null ? "ひみつの願い" : ema.messageText}
-            </span>
-          </EmaShape>
-          <dl className="detail-list">
-            <div>
-              <dt>願いの種類</dt>
-              <dd>{CATEGORY_LABELS[ema.category]}</dd>
-            </div>
-            <div>
-              <dt>場所</dt>
-              <dd>{ema.slotNumber.toLocaleString("ja-JP")}番</dd>
-            </div>
-          </dl>
-        </StageCard>
-
-        <div className="card-grid">
-          <StageCard title="できること">
-            <p>この絵馬が掛かっている場所を地図で確認できます。</p>
-            <div className="action-row">
-              <Link
-                className="button button--secondary"
-                href={worldLocationHref(worldSlug, ema.x, ema.y)}
-              >
-                地図で見る
-              </Link>
-              <Link className="button button--quiet" href="/me">
-                本人管理画面
-              </Link>
-            </div>
-          </StageCard>
-          <StageCard title="公開範囲について" tone="private">
-            <p>
-              {ema.messageVisibility === "owner_only"
-                ? "願いの本文は本人だけに保存され、この公開ページには渡していません。表示名・分類・場所は公開情報です。"
-                : "この願いの本文と表示名は、現在の公開設定に従って表示されています。"}
-            </p>
-          </StageCard>
-        </div>
-      </div>
+      <EmaDetailLive
+        initialEma={ema}
+        configuredOrigin={getServerRuntimeConfig().appOrigin}
+      />
     </section>
   );
 }

@@ -26,7 +26,7 @@ export default function HomePage() {
             </Link>
           </div>
           <p className="fine-print">
-            地図・一覧・投稿・本人管理を利用できます。近くへの招待と共有は、後続の段階で追加します。
+            地図・一覧・投稿・本人管理に加え、公開範囲を守った共有と近くへの招待を利用できます。
           </p>
         </div>
         <div className="hero__visual" aria-hidden="true">
@@ -59,9 +59,9 @@ export default function HomePage() {
             <span className="feature-card__number" aria-hidden="true">
               3
             </span>
-            <h2>あとから管理する</h2>
+            <h2>共有して管理する</h2>
             <p>
-              掛けた後は、自分の絵馬の確認・編集・削除や、任意のメール引継ぎができます。
+              掛けた後は、内容を確認して共有し、自分の絵馬の編集・削除や任意のメール引継ぎができます。
             </p>
           </article>
         </div>

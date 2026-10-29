@@ -4,6 +4,7 @@ import type {
   Category,
   CreateEmaInput,
   DeleteEmaInput,
+  NearbyQuery,
   OverviewCellSize,
   UpdateEmaInput,
 } from "@/domain";
@@ -111,6 +112,15 @@ export interface PublicChunkJoinedRow extends QueryResultRow {
   version: number | null;
   created_at: DatabaseTimestamp | null;
   updated_at: DatabaseTimestamp | null;
+}
+
+export interface NearbyRow extends QueryResultRow {
+  origin_x: number;
+  origin_y: number;
+  searched_radius: number;
+  candidate_x: number | null;
+  candidate_y: number | null;
+  slot_number: number | null;
 }
 
 export interface OwnerEmaRow extends QueryResultRow {
@@ -288,6 +298,25 @@ export async function queryRandomPublicEma(
     [worldSlug, category, pivot],
   );
   return result.rows[0] ?? null;
+}
+
+export async function queryNearbySlots(
+  client: DatabaseClient,
+  worldSlug: string,
+  query: NearbyQuery,
+): Promise<NearbyRow[]> {
+  const result = await client.query<NearbyRow>(
+    `select * from app_private.get_nearby_slots(
+      $1::text, $2::uuid, $3::integer, $4::integer
+    )`,
+    [
+      worldSlug,
+      "near" in query ? query.near : null,
+      "x" in query ? query.x : null,
+      "y" in query ? query.y : null,
+    ],
+  );
+  return result.rows;
 }
 
 export async function queryOwnerEma(

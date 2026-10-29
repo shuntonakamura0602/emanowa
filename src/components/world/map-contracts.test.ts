@@ -18,6 +18,7 @@ import {
   pruneMapCache,
   visibleChunks,
   worldLocationHref,
+  worldPairLocationHref,
   worldPointFromCanvas,
   zoomCameraAt,
   type Camera,
@@ -196,6 +197,15 @@ describe("段階Dのチャンク・URL契約", () => {
       "/w/2027%2F%E7%89%B9%E5%88%A5?x=12&y=34&z=80",
     );
     expect(worldLocationHref("2027", 12, 34)).not.toContain("publicId");
+  });
+
+  it("招待元と新しい絵馬の中点を狭い画面でも確認できる縮尺にする", () => {
+    expect(
+      worldPairLocationHref("2027", { x: 100, y: 200 }, { x: 120, y: 180 }),
+    ).toBe("/w/2027?x=110&y=190&z=8");
+    expect(
+      worldPairLocationHref("2027/特別", { x: 0, y: 0 }, { x: 3, y: 3 }),
+    ).toContain("/w/2027%2F%E7%89%B9%E5%88%A5?");
   });
 
   it("不正な保存カメラを復元しない", () => {

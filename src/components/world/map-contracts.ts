@@ -348,6 +348,20 @@ export function worldLocationHref(
   return `/w/${encodeURIComponent(worldSlug)}?${search}`;
 }
 
+/** Centers an invite pair and uses a scale that keeps a radius-20 nearby
+ * result visible even in a 320px-wide map viewport. */
+export function worldPairLocationHref(
+  worldSlug: string,
+  first: WorldPoint,
+  second: WorldPoint,
+): string {
+  const midpoint = {
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  };
+  return worldLocationHref(worldSlug, midpoint.x, midpoint.y, 8);
+}
+
 export function chooseInitialOverviewCamera(
   response: OverviewResponse,
 ): Camera | null {

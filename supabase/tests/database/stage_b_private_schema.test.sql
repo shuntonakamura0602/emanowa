@@ -107,8 +107,6 @@ values
   ('10000000-0000-4000-8000-000000000003', 'authenticated', 'authenticated', 'owner-c@example.test', now(), now());
 
 set local role emanowa_owner;
-create policy stage_b_test_world_update on app_private.worlds
-  for update to emanowa_owner using (true) with check (true);
 update app_private.worlds
 set state = 'open', opens_at = now() - interval '1 hour', closes_at = now() + interval '1 year'
 where slug = '2027';

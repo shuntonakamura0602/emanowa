@@ -3,8 +3,20 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import type { ApiErrorCode, CreateEmaInput } from "@/domain/schemas";
+import { measurePublicEvent } from "@/components/analytics/public-measurement";
+import { fromSlotNumber } from "@/domain/coordinates";
+import {
+  nearbyResponseSchema,
+  publicEmaSchema,
+  type ApiErrorCode,
+  type CreateEmaInput,
+  type PublicEma,
+} from "@/domain/schemas";
 import { countGraphemes } from "@/domain/text";
+import {
+  worldLocationHref,
+  worldPairLocationHref,
+} from "@/components/world/map-contracts";
 
 import { TurnstileChallenge } from "../auth/turnstile-challenge";
 import {
@@ -29,6 +41,7 @@ import {
   canonicalCreatePayload,
   createInputFromDraft,
   draftStorageKey,
+  existingOwnerEmaFromResponse,
   isApiError,
   isMutationReceipt,
   messageForApiError,
@@ -37,13 +50,18 @@ import {
   removeStoredDraft,
   writeStoredDraft,
   type EmaDraft,
+  type ExistingOwnerEma,
   type FieldErrors,
+  type InviteContext,
   type StoredEmaDraft,
 } from "./ui-contracts";
 
 type Step = "write" | "confirm" | "success";
 type SubmitState = "idle" | "saving" | "error" | "unknown";
 type AuthState = "idle" | "checking" | "ready" | "error";
+type OwnerCheckState = "available" | "checking" | "existing" | "error";
+
+const INVITE_REFRESH_MILLISECONDS = 30_000;
 
 function emptyStoredDraft(
   authContextEpoch: string | null,
@@ -74,17 +92,97 @@ function retryDelayFromResponse(
   return Number.isFinite(headerDelay) ? Math.max(0, headerDelay) : 0;
 }
 
+function candidateSlotsFromKey(value: string): number[] {
+  return value === "" ? [] : value.split(",").map(Number);
+}
+
+function InviteSummary({
+  worldSlug,
+  context,
+  sourceRefreshMessage,
+}: {
+  worldSlug: string;
+  context: InviteContext;
+  sourceRefreshMessage: string | null;
+}) {
+  const statusCopy: Record<InviteContext["status"], string> = {
+    ready: `近くの空き候補を${context.candidates.length}件案内しています。場所は予約されていないため、保存時にもう一度確認します。`,
+    unavailable:
+      "招待された絵馬を表示できませんでした。この年の絵馬掛けから場所を選べます。",
+    no_candidates:
+      "半径20枠まで探しましたが、近くに空きが見つかりませんでした。番号を入力して別の場所を選べます。",
+    world_full:
+      "この年の絵馬掛けは満杯です。招待元を眺めることはできますが、新しい絵馬は掛けられません。",
+    not_accepting:
+      "この年は現在、新しい絵馬を受け付けていません。招待元を眺めることはできます。",
+  };
+
+  return (
+    <section
+      className="stage-card stage-card--warm"
+      aria-labelledby="invite-title"
+    >
+      <p className="eyebrow">近くへの招待</p>
+      <h2 id="invite-title">友達の絵馬の近くに掛ける</h2>
+      <p>{statusCopy[context.status]}</p>
+      {sourceRefreshMessage ? (
+        <p className="form-message form-message--error" role="status">
+          {sourceRefreshMessage}
+        </p>
+      ) : null}
+      {context.source ? (
+        <>
+          <EmaPreview
+            wishText={context.source.messageText ?? ""}
+            nickname={context.source.nickname}
+            category={context.source.category}
+            visibility={context.source.visibility}
+            messageVisibility={context.source.messageVisibility}
+            surface="link"
+            slotNumber={context.source.slotNumber}
+          />
+          <div className="action-row">
+            <Link
+              className="button button--secondary"
+              href={`/w/${encodeURIComponent(worldSlug)}/e/${context.source.publicId}`}
+            >
+              招待元の絵馬を見る
+            </Link>
+            <Link
+              className="button button--quiet"
+              href={worldLocationHref(
+                worldSlug,
+                context.source.x,
+                context.source.y,
+              )}
+            >
+              招待元を地図で見る
+            </Link>
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 export function NewEmaFlow({
   worldSlug,
   captchaSiteKey,
   captchaRequired,
   initialSlotNumber = null,
+  inviteContext = null,
 }: {
   worldSlug: string;
   captchaSiteKey: string | null;
   captchaRequired: boolean;
   initialSlotNumber?: number | null;
+  inviteContext?: InviteContext | null;
 }) {
+  const inviteCandidateKey =
+    inviteContext?.candidates
+      .map((candidate) => candidate.slotNumber)
+      .join(",") ?? "";
+  const inviteNearPublicId = inviteContext?.nearPublicId ?? null;
   const [draft, setDraft] = useState<EmaDraft>(() =>
     initialSlotNumber === null
       ? EMPTY_DRAFT
@@ -101,7 +199,25 @@ export function NewEmaFlow({
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [lastErrorCode, setLastErrorCode] = useState<ApiErrorCode | null>(null);
   const [retrySeconds, setRetrySeconds] = useState(0);
-  const [nearbyCandidates, setNearbyCandidates] = useState<number[]>([]);
+  const [nearbyCandidates, setNearbyCandidates] = useState<number[]>(() =>
+    candidateSlotsFromKey(inviteCandidateKey),
+  );
+  const [inviteSource, setInviteSource] = useState<PublicEma | null>(
+    () => inviteContext?.source ?? null,
+  );
+  const [inviteSourceInvalidated, setInviteSourceInvalidated] = useState(false);
+  const [inviteSourceRefreshMessage, setInviteSourceRefreshMessage] = useState<
+    string | null
+  >(null);
+  const [inviteRefreshMessage, setInviteRefreshMessage] = useState<
+    string | null
+  >(null);
+  const [ownerCheckState, setOwnerCheckState] = useState<OwnerCheckState>(
+    inviteNearPublicId ? "checking" : "available",
+  );
+  const [existingOwnerEma, setExistingOwnerEma] =
+    useState<ExistingOwnerEma | null>(null);
+  const [ownerCheckRevision, setOwnerCheckRevision] = useState(0);
   const [previewSurface, setPreviewSurface] = useState<PreviewSurface>("map");
   const [receipt, setReceipt] = useState<{ publicId: string } | null>(null);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
@@ -109,6 +225,7 @@ export function NewEmaFlow({
   const [authTransitionPending, setAuthTransitionPending] = useState(false);
 
   const authPromiseRef = useRef<Promise<boolean> | null>(null);
+  const inviteLandedMeasuredRef = useRef(false);
   const authContextGenerationRef = useRef(0);
   const authContextEpochRef = useRef<string | null>(null);
   const hasStartedInputRef = useRef(false);
@@ -126,6 +243,46 @@ export function NewEmaFlow({
   const slotNumber = Number(draft.slotNumber);
   const validSlotNumber = Number.isInteger(slotNumber) ? slotNumber : null;
   const inputsLocked = submitState === "saving" || submitState === "unknown";
+  const displayedCandidates = nearbyCandidates.map((candidate) => ({
+    ...fromSlotNumber(candidate),
+    slotNumber: candidate,
+  }));
+  const displayedInviteContext: InviteContext | null = inviteContext
+    ? inviteSourceInvalidated
+      ? {
+          ...inviteContext,
+          source: null,
+          origin: null,
+          candidates: [],
+          searchedRadius: null,
+          status: "unavailable",
+        }
+      : {
+          ...inviteContext,
+          source: inviteSource,
+          candidates: displayedCandidates,
+          status:
+            inviteContext.status === "world_full" ||
+            inviteContext.status === "not_accepting" ||
+            inviteContext.status === "unavailable"
+              ? inviteContext.status
+              : displayedCandidates.length > 0
+                ? "ready"
+                : "no_candidates",
+        }
+    : null;
+  let completedPairHref: string | null = null;
+  if (inviteSource && validSlotNumber !== null) {
+    try {
+      completedPairHref = worldPairLocationHref(
+        worldSlug,
+        { x: inviteSource.x, y: inviteSource.y },
+        fromSlotNumber(validSlotNumber),
+      );
+    } catch {
+      completedPairHref = null;
+    }
+  }
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -154,7 +311,113 @@ export function NewEmaFlow({
       setDraftReady(true);
     });
     return () => cancelAnimationFrame(frame);
-  }, [initialSlotNumber, storageKey]);
+  }, [initialSlotNumber, inviteNearPublicId, storageKey]);
+
+  useEffect(() => {
+    if (
+      inviteLandedMeasuredRef.current ||
+      (inviteContext?.status !== "ready" &&
+        inviteContext?.status !== "no_candidates")
+    ) {
+      return;
+    }
+    inviteLandedMeasuredRef.current = true;
+    measurePublicEvent({ name: "invite_landed", worldSlug });
+  }, [inviteContext?.status, worldSlug]);
+
+  useEffect(() => {
+    const sourcePublicId = inviteContext?.source?.publicId;
+    if (!inviteNearPublicId || !sourcePublicId) return;
+
+    let request: AbortController | null = null;
+    const hideSource = (message: string) => {
+      setInviteSource(null);
+      setInviteSourceInvalidated(true);
+      setInviteSourceRefreshMessage(message);
+      setNearbyCandidates([]);
+    };
+    const refreshSource = async () => {
+      request?.abort();
+      const controller = new AbortController();
+      request = controller;
+      try {
+        const response = await fetch(
+          `/api/v1/worlds/${encodeURIComponent(worldSlug)}/emas/${encodeURIComponent(sourcePublicId)}`,
+          {
+            cache: "no-store",
+            credentials: "omit",
+            signal: controller.signal,
+          },
+        );
+        if (response.status === 404) {
+          hideSource(
+            "招待元の絵馬は削除されたか、現在は公開されていないため内容を非表示にしました。",
+          );
+          return;
+        }
+        if (!response.ok) throw new Error("invite source refresh failed");
+        const body = (await safeJson(response)) as { ema?: unknown } | null;
+        const parsed = publicEmaSchema.safeParse(body?.ema);
+        if (
+          !parsed.success ||
+          parsed.data.publicId !== sourcePublicId ||
+          parsed.data.worldSlug !== worldSlug
+        ) {
+          throw new Error("invalid invite source response");
+        }
+        try {
+          const query = new URLSearchParams({ near: sourcePublicId });
+          const nearbyResponse = await fetch(
+            `/api/v1/worlds/${encodeURIComponent(worldSlug)}/nearby?${query}`,
+            {
+              cache: "no-store",
+              credentials: "omit",
+              headers: { Accept: "application/json" },
+              signal: controller.signal,
+            },
+          );
+          const nearbyBody = await safeJson(nearbyResponse);
+          const nearby = nearbyResponseSchema.safeParse(nearbyBody);
+          if (!nearbyResponse.ok || !nearby.success) {
+            throw new Error("invite candidates refresh failed");
+          }
+          setNearbyCandidates(
+            nearby.data.candidates.map((candidate) => candidate.slotNumber),
+          );
+          setInviteSource(parsed.data);
+          setInviteSourceInvalidated(false);
+          setInviteSourceRefreshMessage(null);
+          setInviteRefreshMessage(null);
+        } catch {
+          if (controller.signal.aborted) return;
+          hideSource(
+            "招待元の最新の公開状態を確認できないため、内容を一時的に非表示にしました。",
+          );
+          setInviteRefreshMessage(
+            "近くの空き候補を更新できませんでした。番号を入力して別の場所を選べます。",
+          );
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+        hideSource(
+          "招待元の最新の公開状態を確認できないため、内容を一時的に非表示にしました。",
+        );
+      }
+    };
+    const interval = window.setInterval(
+      () => void refreshSource(),
+      INVITE_REFRESH_MILLISECONDS,
+    );
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshSource();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      request?.abort();
+    };
+  }, [inviteContext?.source?.publicId, inviteNearPublicId, worldSlug]);
 
   useEffect(
     () =>
@@ -168,6 +431,10 @@ export function NewEmaFlow({
 
         if (change.phase === "pending") {
           setAuthTransitionPending(true);
+          if (inviteNearPublicId) {
+            setOwnerCheckState("checking");
+            setExistingOwnerEma(null);
+          }
           return;
         }
 
@@ -188,24 +455,85 @@ export function NewEmaFlow({
           setGlobalMessage(
             "別のタブの本人情報変更は完了しませんでした。下書きを保持しています。",
           );
+          setOwnerCheckState("checking");
+          setExistingOwnerEma(null);
+          setOwnerCheckRevision((revision) => revision + 1);
           return;
         }
 
-        setDraft(EMPTY_DRAFT);
-        setStored(emptyStoredDraft(change.epoch));
+        const initial = emptyStoredDraft(change.epoch, initialSlotNumber);
+        setDraft(initial.values);
+        setStored(initial);
         setStep("write");
         setFieldErrors({});
         setLastErrorCode(null);
         setRetrySeconds(0);
-        setNearbyCandidates([]);
+        setNearbyCandidates(candidateSlotsFromKey(inviteCandidateKey));
+        setInviteRefreshMessage(null);
         setReceipt(null);
         setGlobalMessage(
           "別のタブで本人情報が変更されたため、このタブの下書きを消去しました。",
         );
         removeStoredDraft(sessionStorage, storageKey);
+        setOwnerCheckState("checking");
+        setExistingOwnerEma(null);
+        setOwnerCheckRevision((revision) => revision + 1);
       }),
-    [initialSlotNumber, storageKey],
+    [initialSlotNumber, inviteCandidateKey, inviteNearPublicId, storageKey],
   );
+
+  useEffect(() => {
+    if (!inviteNearPublicId) {
+      return;
+    }
+
+    const authSnapshot = readAuthContextSnapshot();
+    if (authSnapshot.phase === "pending") {
+      return;
+    }
+
+    let cancelled = false;
+    void withAnonymousSessionLock(async () => {
+      const response = await fetch(
+        `/api/v1/me/emas?world=${encodeURIComponent(worldSlug)}`,
+        {
+          method: "GET",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        },
+      );
+      const body = await safeJson(response);
+      return { response, body };
+    })
+      .then(({ response, body }) => {
+        if (cancelled) return;
+        if (response.status === 401) {
+          setOwnerCheckState("available");
+          return;
+        }
+        if (!response.ok) {
+          setOwnerCheckState("error");
+          return;
+        }
+        const owned = existingOwnerEmaFromResponse(body, worldSlug);
+        if (owned === undefined) {
+          setOwnerCheckState("error");
+        } else if (owned === null) {
+          setOwnerCheckState("available");
+        } else {
+          setExistingOwnerEma(owned);
+          setOwnerCheckState("existing");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setOwnerCheckState("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteNearPublicId, ownerCheckRevision, worldSlug]);
 
   useEffect(() => {
     if (!draftReady || authTransitionPending || step === "success") return;
@@ -287,7 +615,8 @@ export function NewEmaFlow({
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
     setLastErrorCode(null);
     setGlobalMessage(null);
-    setNearbyCandidates([]);
+    if (!inviteNearPublicId) setNearbyCandidates([]);
+    setInviteRefreshMessage(null);
     if (submitState === "error") setSubmitState("idle");
     if (
       (authState === "idle" || authState === "error") &&
@@ -378,6 +707,53 @@ export function NewEmaFlow({
     challengeToken: string | null = captchaToken,
   ): Promise<boolean> {
     return requestAnonymousSession(challengeToken);
+  }
+
+  async function refreshInviteCandidates(): Promise<boolean> {
+    if (!inviteNearPublicId) return false;
+    try {
+      const query = new URLSearchParams({ near: inviteNearPublicId });
+      const response = await fetch(
+        `/api/v1/worlds/${encodeURIComponent(worldSlug)}/nearby?${query}`,
+        {
+          method: "GET",
+          credentials: "omit",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        },
+      );
+      const body = await safeJson(response);
+      if (!response.ok) {
+        setNearbyCandidates([]);
+        setInviteSource(null);
+        setInviteSourceInvalidated(true);
+        setInviteSourceRefreshMessage(
+          "招待元の最新の公開状態を確認できないため、内容を非表示にしました。",
+        );
+        setInviteRefreshMessage(
+          "招待された絵馬を現在は確認できません。地図から別の場所を選べます。",
+        );
+        return true;
+      }
+      const parsed = nearbyResponseSchema.safeParse(body);
+      if (!parsed.success) return false;
+      setNearbyCandidates(
+        parsed.data.candidates.map((candidate) => candidate.slotNumber),
+      );
+      setInviteRefreshMessage(
+        parsed.data.candidates.length > 0
+          ? "近くの空き候補を更新しました。場所を選び直してください。"
+          : "近くに空きが見つかりません。番号を入力して別の場所を選べます。",
+      );
+      return true;
+    } catch {
+      setInviteSource(null);
+      setInviteSourceInvalidated(true);
+      setInviteSourceRefreshMessage(
+        "招待元の最新の公開状態を確認できないため、内容を一時的に非表示にしました。",
+      );
+      return false;
+    }
   }
 
   function handlePreview(event: FormEvent<HTMLFormElement>): void {
@@ -524,9 +900,12 @@ export function NewEmaFlow({
         setFieldErrors(nextFieldErrors);
 
         if (body.error.code === "SLOT_TAKEN") {
-          setNearbyCandidates(
-            nearbySlotCandidates(parsed.input.y * 1_000 + parsed.input.x + 1),
-          );
+          const inviteCandidatesRefreshed = await refreshInviteCandidates();
+          if (!inviteCandidatesRefreshed) {
+            setNearbyCandidates(
+              nearbySlotCandidates(parsed.input.y * 1_000 + parsed.input.x + 1),
+            );
+          }
           setStep("write");
           focusFirstError({ slotNumber: messageForApiError(body.error) });
         } else if (
@@ -564,6 +943,10 @@ export function NewEmaFlow({
 
       if (!authContextIsCurrent()) return;
 
+      measurePublicEvent({ name: "ema_created", worldSlug });
+      if (inviteContext?.source) {
+        measurePublicEvent({ name: "invite_ema_created", worldSlug });
+      }
       setReceipt({ publicId: candidate.publicId });
       setSubmitState("idle");
       setStep("success");
@@ -595,19 +978,17 @@ export function NewEmaFlow({
     ) {
       return;
     }
-    setDraft(EMPTY_DRAFT);
-    const empty: StoredEmaDraft = {
-      version: 2,
-      authContextEpoch: authContextEpochRef.current,
-      values: EMPTY_DRAFT,
-      idempotencyKey: null,
-      idempotencyPayload: null,
-    };
+    const empty = emptyStoredDraft(
+      authContextEpochRef.current,
+      initialSlotNumber,
+    );
+    setDraft(empty.values);
     setStored(empty);
     setFieldErrors({});
     setGlobalMessage(null);
     setLastErrorCode(null);
-    setNearbyCandidates([]);
+    setNearbyCandidates(candidateSlotsFromKey(inviteCandidateKey));
+    setInviteRefreshMessage(null);
     setSubmitState("idle");
     setStep("write");
     removeStoredDraft(sessionStorage, storageKey);
@@ -640,8 +1021,14 @@ export function NewEmaFlow({
             if (!committed) return;
             authContextGenerationRef.current += 1;
             authContextEpochRef.current = committed.epoch;
-            setDraft(EMPTY_DRAFT);
-            setStored(emptyStoredDraft(committed.epoch));
+            const initial = emptyStoredDraft(
+              committed.epoch,
+              initialSlotNumber,
+            );
+            setDraft(initial.values);
+            setStored(initial);
+            setNearbyCandidates(candidateSlotsFromKey(inviteCandidateKey));
+            setInviteRefreshMessage(null);
             setDraftReady(true);
             setAuthTransitionPending(false);
             setStep("write");
@@ -650,11 +1037,97 @@ export function NewEmaFlow({
               "中断された本人情報変更から復旧し、以前の下書きを破棄しました。",
             );
             removeStoredDraft(sessionStorage, storageKey);
+            setOwnerCheckState("checking");
+            setExistingOwnerEma(null);
+            setOwnerCheckRevision((revision) => revision + 1);
           }}
         >
           中断した操作から安全に復旧する
         </button>
       </section>
+    );
+  }
+
+  if (inviteContext && ownerCheckState === "checking") {
+    return (
+      <div className="ema-flow">
+        <InviteSummary
+          worldSlug={worldSlug}
+          context={displayedInviteContext ?? inviteContext}
+          sourceRefreshMessage={inviteSourceRefreshMessage}
+        />
+        <section
+          className="stage-card stage-card--private"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <h2>この年の絵馬を確認しています</h2>
+          <p>
+            確認のために新しい会員登録は行いません。現在のブラウザーに本人情報がある場合だけ確認します。
+          </p>
+        </section>
+      </div>
+    );
+  }
+
+  if (inviteContext && ownerCheckState === "existing" && existingOwnerEma) {
+    return (
+      <div className="ema-flow">
+        <InviteSummary
+          worldSlug={worldSlug}
+          context={displayedInviteContext ?? inviteContext}
+          sourceRefreshMessage={inviteSourceRefreshMessage}
+        />
+        <section
+          className="stage-card stage-card--private"
+          aria-labelledby="existing-ema-title"
+        >
+          <h2 id="existing-ema-title">この年の絵馬は、すでに掛けています</h2>
+          <p>
+            一年に掛けられる絵馬は一枚です。招待を理由に、今の絵馬を移動したり二枚目を作ったりすることはありません。
+          </p>
+          <div className="action-row">
+            <Link
+              className="button"
+              href={`/w/${encodeURIComponent(worldSlug)}/e/${existingOwnerEma.publicId}/edit`}
+            >
+              自分の絵馬を確認する
+            </Link>
+            <Link className="button button--quiet" href="/me">
+              本人管理画面へ
+            </Link>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (
+    inviteContext?.status === "world_full" ||
+    inviteContext?.status === "not_accepting"
+  ) {
+    return (
+      <div className="ema-flow">
+        <InviteSummary
+          worldSlug={worldSlug}
+          context={displayedInviteContext ?? inviteContext}
+          sourceRefreshMessage={inviteSourceRefreshMessage}
+        />
+        <section className="stage-card" aria-labelledby="posting-closed-title">
+          <h2 id="posting-closed-title">新しい絵馬は掛けられません</h2>
+          <p>
+            入力を始める前に受付状態を確認しました。地図や招待元の絵馬は引き続き眺められます。
+          </p>
+          <div className="action-row">
+            <Link
+              className="button button--secondary"
+              href={`/w/${encodeURIComponent(worldSlug)}`}
+            >
+              この年の地図を見る
+            </Link>
+          </div>
+        </section>
+      </div>
     );
   }
 
@@ -703,6 +1176,11 @@ export function NewEmaFlow({
           <Link className="button button--secondary" href="/me">
             自分の絵馬を見る
           </Link>
+          {completedPairHref ? (
+            <Link className="button button--secondary" href={completedPairHref}>
+              招待元と自分の絵馬を地図で見る
+            </Link>
+          ) : null}
           <Link className="button button--quiet" href="/me#email-link">
             メールで引き継ぐ
           </Link>
@@ -713,6 +1191,13 @@ export function NewEmaFlow({
 
   return (
     <div className="ema-flow">
+      {inviteContext ? (
+        <InviteSummary
+          worldSlug={worldSlug}
+          context={displayedInviteContext ?? inviteContext}
+          sourceRefreshMessage={inviteSourceRefreshMessage}
+        />
+      ) : null}
       <ol className="step-list" aria-label="絵馬を掛ける手順">
         <li aria-current={step === "write" ? "step" : undefined}>1. 入力</li>
         <li aria-current={step === "confirm" ? "step" : undefined}>2. 確認</li>
@@ -860,6 +1345,11 @@ export function NewEmaFlow({
               <p className="field__error" id="slot-error">
                 {fieldErrors.slotNumber}
               </p>
+              {inviteRefreshMessage ? (
+                <p className="form-message" aria-live="polite">
+                  {inviteRefreshMessage}
+                </p>
+              ) : null}
               {nearbyCandidates.length > 0 ? (
                 <div className="candidate-list" aria-label="近くの場所候補">
                   <p>近くの候補（確定時に空きをもう一度確認します）</p>
@@ -869,6 +1359,7 @@ export function NewEmaFlow({
                         key={candidate}
                         className="candidate-button"
                         type="button"
+                        aria-pressed={draft.slotNumber === String(candidate)}
                         onClick={() =>
                           updateDraft("slotNumber", String(candidate))
                         }
@@ -960,6 +1451,11 @@ export function NewEmaFlow({
             <div className="status-stack" aria-live="polite" aria-atomic="true">
               {authState === "checking" ? (
                 <p>編集できる状態を確認しています。</p>
+              ) : null}
+              {inviteContext && ownerCheckState === "error" ? (
+                <p className="form-message">
+                  この年にすでに絵馬があるか先に確認できませんでした。保存時にはサーバーで二枚目を防ぎます。
+                </p>
               ) : null}
               {globalMessage ? (
                 <p className="form-message form-message--error">

@@ -53,6 +53,34 @@ describe("parseServerEnvironment", () => {
     expect(toPublicRuntimeConfigSource(config).captchaRequired).toBe(false);
   });
 
+  it("accepts only a bare APP_ORIGIN and never preserves credentials or URL state", () => {
+    const values = [
+      "https://user:secret@example.com",
+      "https://example.com/base",
+      "https://example.com/?token=secret",
+      "https://example.com/#private",
+    ];
+
+    for (const appOrigin of values) {
+      const config = parseServerEnvironment({
+        ...configuredEnvironment,
+        APP_ORIGIN: appOrigin,
+      });
+      expect(config.appOrigin).toBeNull();
+      expect(config.writesAvailable).toBe(false);
+      expect(config.issues).toContainEqual(
+        expect.objectContaining({ key: "APP_ORIGIN", code: "invalid" }),
+      );
+    }
+
+    expect(
+      parseServerEnvironment({
+        ...configuredEnvironment,
+        APP_ORIGIN: "https://example.com/",
+      }).appOrigin,
+    ).toBe("https://example.com");
+  });
+
   it("does not serialize server secrets into public config", () => {
     const serverConfig = parseServerEnvironment(configuredEnvironment);
     const publicConfig = createPublicRuntimeConfig(

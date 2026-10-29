@@ -161,3 +161,35 @@ DB境界は段階Bと同じ `app_private` の固定search path・execute-only `S
 新着一覧は `(created_at DESC, public_id DESC)` のkeysetとし、cursorにversion、world、category、order、DB精度の作成日時、public IDをcanonical base64urlで保持する。署名は用いないが、未知キー、形式、再符号化、world/category不一致を厳格検証し、最大50件とlookaheadだけを取得する。クライアントはpublic IDで重複除去しつつ、保持件数を制限する。
 
 ランダム訪問は全件 `ORDER BY random()` や巨大OFFSETを使わない。ランダムなUUID pivot以降の先頭1件を索引で探し、なければ先頭へ1回だけ折り返す。category有無のSQL経路を分け、`visibility='public'` のworld索引・category索引に一致させる。対象なしは200の `{item:null}` とし、`unlisted` と `hidden` は候補にしない。
+
+## ADR-E-001: 共有ページと画像は公開投影だけを入力にし、保存しない
+
+- 状態: 採用
+- 日付: 2026-10-29
+- 関連仕様: 05 §2・§3・§8・§9、07 段階E
+
+個別ページ、metadata、OG画像、正方形PNGは同じ `PublicEma` 投影だけを入力にする。`owner_only` の原文は投影時点で `null` のため、HTML、RSC、metadata、画像rendererへ渡らない。画像APIは毎回 `no-store` とし、描画前後で公開versionを再取得する。描画中に公開縮小・非表示・削除が起きた場合は古いbytesを返さず、1回だけ新しい投影で再描画し、さらに変化した場合は一時エラーとする。
+
+画像はruntimeの外部font・emoji CDNへ依存させない。固定commitから取得したNoto Sans JPのOFL版をローカルassetとして同梱し、source・license・SHA-256を記録する。外部emoji fontを取得できない場合に文字が消えたり生成全体が失敗したりしないよう、絵文字graphemeは共有画像だけで明示的な `◇` と説明へ置き換える。元の公開本文、個別ページ、共有文章は変更しない。
+
+XとLINEの入口は本人が確認できる共有dialogから外部の投稿・送信画面を開くだけとし、クリックを投稿完了として扱わない。通常URL・招待URL・画像URLは設定済みoriginと固定pathから再構築し、現在URLのquery、fragment、userinfo、Cookie、tokenを引き継がない。画像失敗時もURLコピーと外部共有を独立して利用できる。
+
+## ADR-E-002: 近隣候補は限定DB関数で探すが予約せず、利用者が選ぶ
+
+- 状態: 採用
+- 日付: 2026-10-29
+- 関連仕様: 03 §6、04 §6・§8、05 §4、07 段階E
+
+招待元または座標の周囲をChebyshev半径3、8、20の順で広げ、最大41×41だけを調べる。最大8候補を距離二乗、表示番号の順に返し、100万枠の空行や全枠scanを作らない。関数は `app_private`、固定search path、`SECURITY DEFINER`、`NOBYPASSRLS` 所有者とし、通常BFF roleだけが実行できる。unlistedはtransaction-localの正確なlookup UUIDがある直接招待だけを解決し、hidden、deleted、別worldは対象にしない。
+
+候補応答は空きの観測であり、予約や所有権を付与しない。画面は候補を自動選択せず、本人が番号を選ぶ。確定時は既存の原子的作成処理で同一枠・同一所有者を再検証し、`SLOT_TAKEN` なら下書きを保持して候補を取り直す。招待URLの `near` は公開設定、所有者、作成payloadへ入れない。既に同年の絵馬があるセッションでは二枚目のフォームを出さず、既存の絵馬へ案内する。
+
+## ADR-E-003: 共有計測は内容を持たないprovider-neutralなブラウザーeventにする
+
+- 状態: 採用
+- 日付: 2026-10-29
+- 関連仕様: 01 §6、05 §8、07 ACCESS-12
+
+P0の `ema_created`、`share_opened`、`share_clicked`、`link_copied`、`share_image_downloaded`、`invite_landed`、`invite_ema_created` は、`emanowa:measurement` というブラウザー `CustomEvent` で通知できるようにする。型付きpayloadは年、共有先、通常/招待の区別だけを許し、願い本文、表示名、メール、公開ID、URL、token、Cookieを受け取らない。
+
+外部analytics providerや永続collectorはリポジトリへ仮設定しない。接続する場合はこのeventのlistener側で行い、失敗や未接続でも共有、コピー、画像保存、投稿を止めない。`share_clicked` は共有先を選んだ事実であり、X投稿完了やLINE送信完了として数えない。

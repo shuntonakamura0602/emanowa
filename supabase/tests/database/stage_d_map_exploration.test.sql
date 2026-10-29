@@ -112,8 +112,6 @@ values
   ('12000000-0000-4000-8000-000000000004', 'authenticated', 'authenticated', 'stage-d-d@example.test', now(), now());
 
 set local role emanowa_owner;
-create policy stage_d_test_world_update on app_private.worlds
-  for update to emanowa_owner using (true) with check (true);
 update app_private.worlds
 set state = 'open',
     opens_at = transaction_timestamp() - interval '1 hour',

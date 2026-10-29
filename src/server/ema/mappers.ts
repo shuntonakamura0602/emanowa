@@ -2,6 +2,7 @@ import type { PublicCapabilities } from "@/config/public";
 import {
   chunkResponseSchema,
   mutationReceiptSchema,
+  nearbyResponseSchema,
   occupiedChunkCellSchema,
   overviewResponseSchema,
   ownerWorldSummarySchema,
@@ -12,6 +13,7 @@ import {
   type ChunkCell,
   type ChunkResponse,
   type MutationReceipt,
+  type NearbyResponse,
   type OverviewCellSize,
   type OverviewResponse,
   type OwnerEma,
@@ -22,6 +24,7 @@ import {
 import type {
   CreateEmaRow,
   MutationEmaRow,
+  NearbyRow,
   OwnerEmaRow,
   OwnerWorldRow,
   PublicChunkCellRow,
@@ -30,6 +33,49 @@ import type {
   PublicOverviewJoinedRow,
   PublicWorldRow,
 } from "@/server/db/queries";
+
+export function mapNearbyRows(rows: NearbyRow[]): NearbyResponse | null {
+  const first = rows[0];
+  if (!first) return null;
+
+  const candidates = rows.flatMap((row, index) => {
+    if (
+      row.origin_x !== first.origin_x ||
+      row.origin_y !== first.origin_y ||
+      row.searched_radius !== first.searched_radius
+    ) {
+      throw new Error(`nearby candidate ${index} does not match its metadata`);
+    }
+    if (
+      row.candidate_x === null ||
+      row.candidate_y === null ||
+      row.slot_number === null
+    ) {
+      if (
+        rows.length !== 1 ||
+        row.candidate_x !== null ||
+        row.candidate_y !== null ||
+        row.slot_number !== null
+      ) {
+        throw new Error("nearby returned a partial empty candidate");
+      }
+      return [];
+    }
+    return [
+      {
+        x: row.candidate_x,
+        y: row.candidate_y,
+        slotNumber: row.slot_number,
+      },
+    ];
+  });
+
+  return nearbyResponseSchema.parse({
+    origin: { x: first.origin_x, y: first.origin_y },
+    candidates,
+    searchedRadius: first.searched_radius,
+  });
+}
 
 function isoTimestamp(value: Date | string): string {
   return value instanceof Date

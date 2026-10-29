@@ -783,10 +783,6 @@ async function main() {
       allowExitOnIdle: true,
     });
     await ownerPool.query(
-      `create policy stage_c_integration_world_update on app_private.worlds
-       for update to emanowa_owner using (true) with check (true)`,
-    );
-    await ownerPool.query(
       `update app_private.worlds
        set state = 'open', posting_enabled = true,
            opens_at = now() - interval '1 day', closes_at = now() + interval '1 day'
@@ -959,14 +955,7 @@ async function main() {
     });
   } finally {
     if (appPool) await appPool.end();
-    if (ownerPool) {
-      await ownerPool
-        .query(
-          "drop policy if exists stage_c_integration_world_update on app_private.worlds",
-        )
-        .catch(() => undefined);
-      await ownerPool.end();
-    }
+    if (ownerPool) await ownerPool.end();
     await adminPool
       .query("alter role emanowa_app nologin password null")
       .catch(() => undefined);
