@@ -18,10 +18,11 @@ select extensions.tables_are(
     'rate_limit_buckets',
     'reports',
     'slot_occupancy',
+    'world_operation_audit',
     'world_chunks',
     'worlds'
   ],
-  'app_private contains exactly the ten P0 tables'
+  'app_private contains exactly the eleven P0 tables'
 );
 
 select extensions.ok(has_schema_privilege('emanowa_app', 'app_private', 'USAGE'), 'BFF role can resolve the private API schema');
@@ -68,13 +69,13 @@ select extensions.ok(
 select extensions.is(
   (select count(*) from pg_class as relation join pg_namespace as namespace on namespace.oid = relation.relnamespace
    where namespace.nspname = 'app_private' and relation.relkind in ('r', 'p') and relation.relrowsecurity),
-  10::bigint,
+  11::bigint,
   'RLS is enabled on all P0 tables'
 );
 select extensions.is(
   (select count(*) from pg_class as relation join pg_namespace as namespace on namespace.oid = relation.relnamespace
    where namespace.nspname = 'app_private' and relation.relkind in ('r', 'p') and relation.relforcerowsecurity),
-  10::bigint,
+  11::bigint,
   'RLS is forced on all P0 tables'
 );
 select extensions.is(

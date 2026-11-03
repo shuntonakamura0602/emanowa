@@ -1,7 +1,20 @@
+import type { Metadata } from "next";
+
 import { OwnerDashboard } from "@/components/ema/owner-dashboard";
 import { PageIntro } from "@/components/site-shell";
 import { FEATURED_WORLD_SLUG } from "@/config/worlds";
 import { getPublicRuntimeConfig } from "@/server/config";
+
+export const metadata: Metadata = {
+  title: "自分の絵馬",
+  robots: {
+    index: false,
+    follow: false,
+    noarchive: true,
+    noimageindex: true,
+    nosnippet: true,
+  },
+};
 
 export default function MePage() {
   const { captchaSiteKey, captchaRequired } = getPublicRuntimeConfig();

@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import {
   FEATURED_WORLD_SLUG,
   getWorldConfig,
@@ -55,8 +57,20 @@ export type ServerRuntimeConfig = {
     operatorName: string | null;
     contactUrl: string | null;
   };
+  publication: {
+    approved: boolean;
+    policyEffectiveDate: string | null;
+    retention: {
+      content: string | null;
+      backups: string | null;
+      logs: string | null;
+    };
+  };
   serviceStatus: PublicServiceStatus;
   writesAvailable: boolean;
+  postingAvailable: boolean;
+  publicationReady: boolean;
+  adminOperationsAvailable: boolean;
   issues: readonly ConfigurationIssue[];
 };
 
@@ -71,6 +85,20 @@ function issueSeverity(environment: EnvironmentName): "warning" | "error" {
   return environment === "production" || environment === "staging"
     ? "error"
     : "warning";
+}
+
+function isPublicEnvironment(environment: EnvironmentName): boolean {
+  return environment === "production" || environment === "staging";
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "::1" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(normalized)
+  );
 }
 
 function parseEnvironment(
@@ -130,34 +158,10 @@ function parseBoolean(
   return false;
 }
 
-function parseHttpUrl(
-  source: EnvironmentSource,
-  key: string,
-  issues: ConfigurationIssue[],
-): string | null {
-  const raw = value(source, key);
-  if (!raw) return null;
-
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("unsupported protocol");
-    }
-    return parsed.toString().replace(/\/$/, "");
-  } catch {
-    issues.push({
-      key,
-      code: "invalid",
-      severity: "error",
-      message: "http または https の有効なURLを指定してください。",
-    });
-    return null;
-  }
-}
-
 function parseHttpOrigin(
   source: EnvironmentSource,
   key: string,
+  environment: EnvironmentName,
   issues: ConfigurationIssue[],
 ): string | null {
   const raw = value(source, key);
@@ -167,6 +171,9 @@ function parseHttpOrigin(
     const parsed = new URL(raw);
     if (
       (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      (isPublicEnvironment(environment) && parsed.protocol !== "https:") ||
+      (isPublicEnvironment(environment) &&
+        isLoopbackHostname(parsed.hostname)) ||
       parsed.username !== "" ||
       parsed.password !== "" ||
       parsed.pathname !== "/" ||
@@ -181,11 +188,56 @@ function parseHttpOrigin(
       key,
       code: "invalid",
       severity: "error",
-      message:
-        "userinfo・path・query・fragmentを含まないhttp/https originを指定してください。",
+      message: isPublicEnvironment(environment)
+        ? "userinfo・path・query・fragmentを含まないHTTPS originを指定してください。"
+        : "userinfo・path・query・fragmentを含まないhttp/https originを指定してください。",
     });
     return null;
   }
+}
+
+function parseSupabasePublishableKey(
+  source: EnvironmentSource,
+  issues: ConfigurationIssue[],
+): string | null {
+  const key = "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY";
+  const raw = value(source, key);
+  if (!raw) return null;
+
+  let privileged = raw.toLowerCase().startsWith("sb_secret_");
+  const jwtParts = raw.split(".");
+  if (!privileged && jwtParts.length === 3) {
+    try {
+      const payload = JSON.parse(
+        Buffer.from(jwtParts[1] ?? "", "base64url").toString("utf8"),
+      ) as { role?: unknown };
+      privileged =
+        typeof payload.role === "string" &&
+        [
+          "service_role",
+          "supabase_admin",
+          "postgres",
+          "authenticator",
+          "dashboard_user",
+        ].includes(payload.role);
+    } catch {
+      // Supabase's current publishable-key format is not a JWT. An opaque key
+      // remains acceptable unless it has a known privileged-key signature.
+    }
+  }
+
+  if (privileged) {
+    issues.push({
+      key,
+      code: "forbidden",
+      severity: "error",
+      message:
+        "ブラウザー公開用のpublishable keyを指定してください。秘密鍵やservice role keyは使用できません。",
+    });
+    return null;
+  }
+
+  return raw;
 }
 
 function parseApplicationDatabaseConnection<
@@ -246,6 +298,179 @@ function addMissingIssue(
   });
 }
 
+function isPlaceholderPublicationText(input: string): boolean {
+  const normalized = input.normalize("NFKC").toLowerCase();
+  return (
+    /(?:\b(?:todo|tbd|placeholder)\b|未定|要設定|要入力|仮入力|ダミー)/u.test(
+      normalized,
+    ) || /[<＜][^>＞]+[>＞]/u.test(normalized)
+  );
+}
+
+function parsePublicationText(
+  source: EnvironmentSource,
+  key: string,
+  environment: EnvironmentName,
+  issues: ConfigurationIssue[],
+  options: {
+    label: string;
+    minCharacters: number;
+    maxBytes: number;
+  },
+): string | null {
+  const raw = value(source, key);
+  if (!raw) {
+    if (isPublicEnvironment(environment)) {
+      addMissingIssue(
+        issues,
+        environment,
+        key,
+        `${options.label}を実際の運用内容に合わせて指定してください。`,
+      );
+    }
+    return null;
+  }
+
+  const characters = Array.from(raw).length;
+  const bytes = new TextEncoder().encode(raw).byteLength;
+  if (
+    characters < options.minCharacters ||
+    bytes > options.maxBytes ||
+    isPlaceholderPublicationText(raw)
+  ) {
+    issues.push({
+      key,
+      code: "invalid",
+      severity: issueSeverity(environment),
+      message: `${options.label}には仮文言ではなく、実際の運用内容を指定してください。`,
+    });
+    return null;
+  }
+
+  return raw;
+}
+
+function parseContactUrl(
+  source: EnvironmentSource,
+  environment: EnvironmentName,
+  issues: ConfigurationIssue[],
+): string | null {
+  const key = "CONTACT_URL";
+  const raw = value(source, key);
+  if (!raw) {
+    if (isPublicEnvironment(environment)) {
+      addMissingIssue(
+        issues,
+        environment,
+        key,
+        "利用者が連絡できるHTTPSの問い合わせ先を指定してください。",
+      );
+    }
+    return null;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (
+      parsed.protocol !== "https:" ||
+      (isPublicEnvironment(environment) &&
+        isLoopbackHostname(parsed.hostname)) ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.hash !== ""
+    ) {
+      throw new Error("not a public HTTPS contact URL");
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    issues.push({
+      key,
+      code: "invalid",
+      severity: issueSeverity(environment),
+      message:
+        "userinfo・fragmentを含まないHTTPSの問い合わせURLを指定してください。",
+    });
+    return null;
+  }
+}
+
+function parsePolicyEffectiveDate(
+  source: EnvironmentSource,
+  environment: EnvironmentName,
+  issues: ConfigurationIssue[],
+): string | null {
+  const key = "POLICY_EFFECTIVE_DATE";
+  const raw = value(source, key);
+  if (!raw) {
+    if (isPublicEnvironment(environment)) {
+      addMissingIssue(
+        issues,
+        environment,
+        key,
+        "利用条件とプライバシー説明の適用日を指定してください。",
+      );
+    }
+    return null;
+  }
+
+  const parsed = new Date(`${raw}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/u.test(raw) ||
+    Number.isNaN(parsed.valueOf()) ||
+    parsed.toISOString().slice(0, 10) !== raw
+  ) {
+    issues.push({
+      key,
+      code: "invalid",
+      severity: issueSeverity(environment),
+      message: "実在する日付をYYYY-MM-DD形式で指定してください。",
+    });
+    return null;
+  }
+
+  return raw;
+}
+
+function parsePublicationApproval(
+  source: EnvironmentSource,
+  environment: EnvironmentName,
+  issues: ConfigurationIssue[],
+): boolean {
+  const key = "PUBLICATION_APPROVED";
+  const raw = value(source, key);
+  if (!raw) {
+    if (environment === "production") {
+      addMissingIssue(
+        issues,
+        environment,
+        key,
+        "本番公開の承認後にtrueを明示してください。",
+      );
+    }
+    return false;
+  }
+  if (raw === "true") return true;
+  if (raw === "false") {
+    if (environment === "production") {
+      issues.push({
+        key,
+        code: "forbidden",
+        severity: "error",
+        message: "本番公開には明示的な公開承認が必要です。",
+      });
+    }
+    return false;
+  }
+
+  issues.push({
+    key,
+    code: "invalid",
+    severity: issueSeverity(environment),
+    message: "true または false を指定してください。",
+  });
+  return false;
+}
+
 function parseDataMode(
   source: EnvironmentSource,
   environment: EnvironmentName,
@@ -256,7 +481,17 @@ function parseDataMode(
   let mode: DataMode;
 
   if (!raw) {
-    mode = databaseConfigured ? "database" : "unconfigured";
+    if (isPublicEnvironment(environment)) {
+      addMissingIssue(
+        issues,
+        environment,
+        "EMANOWA_DATA_MODE",
+        "公開環境ではdatabaseを明示してください。",
+      );
+      mode = "unconfigured";
+    } else {
+      mode = databaseConfigured ? "database" : "unconfigured";
+    }
   } else if (raw === "database" || raw === "demo" || raw === "unconfigured") {
     mode = raw;
   } else {
@@ -294,12 +529,14 @@ export function parseServerEnvironment(
 ): ServerRuntimeConfig {
   const issues: ConfigurationIssue[] = [];
   const environment = parseEnvironment(source, issues);
-  const appOrigin = parseHttpOrigin(source, "APP_ORIGIN", issues);
-  const supabaseUrl = parseHttpUrl(source, "NEXT_PUBLIC_SUPABASE_URL", issues);
-  const supabasePublishableKey = value(
+  const appOrigin = parseHttpOrigin(source, "APP_ORIGIN", environment, issues);
+  const supabaseUrl = parseHttpOrigin(
     source,
-    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    environment,
+    issues,
   );
+  const supabasePublishableKey = parseSupabasePublishableKey(source, issues);
   const databaseConnection = parseApplicationDatabaseConnection(
     source,
     "DATABASE_URL",
@@ -336,7 +573,7 @@ export function parseServerEnvironment(
   const rateLimitHmacSecret = value(source, "RATE_LIMIT_HMAC_SECRET");
   const trustedProxyHops = parseTrustedProxyHops(source, issues);
 
-  if (!appOrigin) {
+  if (!value(source, "APP_ORIGIN")) {
     addMissingIssue(
       issues,
       environment,
@@ -344,7 +581,7 @@ export function parseServerEnvironment(
       "正規URLと認証戻り先の設定がありません。",
     );
   }
-  if (!supabaseUrl) {
+  if (!value(source, "NEXT_PUBLIC_SUPABASE_URL")) {
     addMissingIssue(
       issues,
       environment,
@@ -352,7 +589,7 @@ export function parseServerEnvironment(
       "Supabase Authの接続先がありません。",
     );
   }
-  if (!supabasePublishableKey) {
+  if (!value(source, "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")) {
     addMissingIssue(
       issues,
       environment,
@@ -431,12 +668,38 @@ export function parseServerEnvironment(
     payments: parseBoolean(source, "ENABLE_PAYMENTS", issues),
   } satisfies PublicCapabilities;
 
-  const writesAvailable =
+  const environmentClassificationValid = !issues.some(
+    (issue) =>
+      issue.key === "EMANOWA_ENVIRONMENT" && issue.severity === "error",
+  );
+  const databaseModeRequested =
+    value(source, "EMANOWA_DATA_MODE") === "database";
+
+  const rateLimitConfigured = Boolean(
+    rateLimitHmacSecret &&
+    (!isPublicEnvironment(environment) ||
+      new TextEncoder().encode(rateLimitHmacSecret).byteLength >= 32),
+  );
+
+  // This gate protects ordinary owner/report recovery writes, so it contains
+  // only their shared dependencies. Publication-only settings (CAPTCHA,
+  // trusted proxy, admin DB, policy copy, feature flags, and approval) must
+  // not prevent an existing owner from narrowing visibility or deleting.
+  const writesAvailable = Boolean(
     dataMode === "database" &&
+    environmentClassificationValid &&
+    appOrigin &&
     supabaseConfigured &&
     databaseConfigured &&
-    Boolean(rateLimitHmacSecret) &&
-    !issues.some((issue) => issue.severity === "error");
+    rateLimitConfigured,
+  );
+  const adminOperationsAvailable = Boolean(
+    databaseModeRequested &&
+    environmentClassificationValid &&
+    appOrigin &&
+    supabaseConfigured &&
+    adminDatabaseConnection,
+  );
 
   const serviceStatus: PublicServiceStatus =
     dataMode === "demo"
@@ -444,6 +707,105 @@ export function parseServerEnvironment(
       : writesAvailable
         ? "ready"
         : "configuration_required";
+
+  if (isPublicEnvironment(environment)) {
+    for (const [key, enabled] of [
+      ["ENABLE_GROUPS", capabilities.groups],
+      ["ENABLE_FULFILLMENT", capabilities.fulfillment],
+      ["ENABLE_PAYMENTS", capabilities.payments],
+    ] as const) {
+      if (enabled) {
+        issues.push({
+          key,
+          code: "forbidden",
+          severity: "error",
+          message: "P0公開時は未提供機能をfalseに固定してください。",
+        });
+      }
+    }
+  }
+
+  // Public-document settings are deliberately parsed after writesAvailable is
+  // decided. Missing legal copy must block publication, but must not disable
+  // an owner's edit/delete recovery path on an otherwise healthy runtime.
+  const operatorName = parsePublicationText(
+    source,
+    "OPERATOR_NAME",
+    environment,
+    issues,
+    {
+      label: "運営者名",
+      minCharacters: 2,
+      maxBytes: 512,
+    },
+  );
+  const contactUrl = parseContactUrl(source, environment, issues);
+  const policyEffectiveDate = parsePolicyEffectiveDate(
+    source,
+    environment,
+    issues,
+  );
+  const contentRetentionNotice = parsePublicationText(
+    source,
+    "CONTENT_RETENTION_NOTICE",
+    environment,
+    issues,
+    {
+      label: "投稿内容の保存期間説明",
+      minCharacters: 8,
+      maxBytes: 2_000,
+    },
+  );
+  const backupRetentionNotice = parsePublicationText(
+    source,
+    "BACKUP_RETENTION_NOTICE",
+    environment,
+    issues,
+    {
+      label: "バックアップの保存期間説明",
+      minCharacters: 8,
+      maxBytes: 2_000,
+    },
+  );
+  const logRetentionNotice = parsePublicationText(
+    source,
+    "LOG_RETENTION_NOTICE",
+    environment,
+    issues,
+    {
+      label: "ログの保存期間説明",
+      minCharacters: 8,
+      maxBytes: 2_000,
+    },
+  );
+  const publicationApproved = parsePublicationApproval(
+    source,
+    environment,
+    issues,
+  );
+  const hasPublicationErrors = issues.some(
+    (issue) => issue.severity === "error",
+  );
+  const publicationReady = Boolean(
+    writesAvailable &&
+    appOrigin?.startsWith("https://") &&
+    adminOperationsAvailable &&
+    captchaConfigured &&
+    trustedProxyHops !== null &&
+    operatorName &&
+    contactUrl &&
+    policyEffectiveDate &&
+    contentRetentionNotice &&
+    backupRetentionNotice &&
+    logRetentionNotice &&
+    !capabilities.groups &&
+    !capabilities.fulfillment &&
+    !capabilities.payments &&
+    !hasPublicationErrors &&
+    (environment !== "production" || publicationApproved),
+  );
+  const postingAvailable =
+    writesAvailable && (!isPublicEnvironment(environment) || publicationReady);
 
   return {
     environment,
@@ -471,11 +833,23 @@ export function parseServerEnvironment(
     rateLimitHmacSecret,
     trustedProxyHops,
     operations: {
-      operatorName: value(source, "OPERATOR_NAME"),
-      contactUrl: value(source, "CONTACT_URL"),
+      operatorName,
+      contactUrl,
+    },
+    publication: {
+      approved: publicationApproved,
+      policyEffectiveDate,
+      retention: {
+        content: contentRetentionNotice,
+        backups: backupRetentionNotice,
+        logs: logRetentionNotice,
+      },
     },
     serviceStatus,
     writesAvailable,
+    postingAvailable,
+    publicationReady,
+    adminOperationsAvailable,
     issues,
   };
 }
@@ -484,6 +858,7 @@ export function toPublicRuntimeConfigSource(
   config: ServerRuntimeConfig,
 ): PublicRuntimeConfigSource {
   return {
+    environment: config.environment,
     appOrigin: config.appOrigin,
     featuredWorld: config.featuredWorld,
     capabilities: config.capabilities,
@@ -494,6 +869,11 @@ export function toPublicRuntimeConfigSource(
     serviceStatus: config.serviceStatus,
     databaseConfigured: config.database.configured,
     writesAvailable: config.writesAvailable,
+    postingAvailable: config.postingAvailable,
+    operations: config.operations,
+    publicationReady: config.publicationReady,
+    policyEffectiveDate: config.publication.policyEffectiveDate,
+    retention: config.publication.retention,
   };
 }
 

@@ -18,6 +18,8 @@ type ApiErrorCode = (typeof API_ERROR_CODE_VALUES)[number];
 export type AnonymousEndpointConfig = {
   environment: EnvironmentName;
   appOrigin: string | null;
+  postingAvailable: boolean;
+  writesAvailable: boolean;
   supabase: {
     url: string | null;
     publishableKey: string | null;
@@ -41,6 +43,7 @@ export type AnonymousEndpointDependencies<
 };
 
 type AnonymousRequestBody = {
+  purpose: "post" | "report";
   captchaToken?: string;
 };
 
@@ -188,7 +191,9 @@ async function parseBody(request: Request): Promise<AnonymousRequestBody> {
   }
 
   const keys = Object.keys(parsed);
-  const unknownKey = keys.find((key) => key !== "captchaToken");
+  const unknownKey = keys.find(
+    (key) => key !== "captchaToken" && key !== "purpose",
+  );
   if (unknownKey) {
     throw new RequestValidationError(
       unknownKey,
@@ -196,7 +201,15 @@ async function parseBody(request: Request): Promise<AnonymousRequestBody> {
     );
   }
 
-  if (!("captchaToken" in parsed)) return {};
+  const purpose = "purpose" in parsed ? parsed.purpose : "post";
+  if (purpose !== "post" && purpose !== "report") {
+    throw new RequestValidationError(
+      "purpose",
+      "匿名セッションの用途が不正です。",
+    );
+  }
+
+  if (!("captchaToken" in parsed)) return { purpose };
   const captchaToken = parsed.captchaToken;
   if (typeof captchaToken !== "string" || captchaToken.trim().length === 0) {
     throw new RequestValidationError(
@@ -213,7 +226,7 @@ async function parseBody(request: Request): Promise<AnonymousRequestBody> {
     );
   }
 
-  return { captchaToken };
+  return { purpose, captchaToken };
 }
 
 export function createAnonymousSessionHandler<
@@ -272,6 +285,22 @@ export function createAnonymousSessionHandler<
         );
       }
       throw error;
+    }
+
+    const purposeAvailable =
+      body.purpose === "post"
+        ? config.postingAvailable
+        : config.writesAvailable;
+    if (!purposeAvailable) {
+      return errorResponse(
+        "TEMPORARILY_UNAVAILABLE",
+        body.purpose === "post"
+          ? "新規投稿は現在利用できません。"
+          : "通報は現在利用できません。",
+        503,
+        requestId,
+        headers,
+      );
     }
 
     if (!config.supabase.configured) {

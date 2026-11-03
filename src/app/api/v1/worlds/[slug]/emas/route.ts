@@ -22,7 +22,7 @@ import { apiErrorResponse, jsonResponse } from "@/server/api/response";
 import { getVerifiedActor } from "@/server/auth/session";
 import {
   getServerRuntimeConfig,
-  requireWriteConfiguration,
+  requirePostingConfiguration,
 } from "@/server/config";
 import { createEma, listPublicEmas } from "@/server/ema/repository";
 import { enforceActorRateLimit } from "@/server/rate-limit/enforce";
@@ -84,7 +84,7 @@ export async function POST(
   try {
     const config = getServerRuntimeConfig();
     assertSameOrigin(request, config.appOrigin);
-    requireWriteConfiguration();
+    requirePostingConfiguration();
     const authClient = await createSupabaseServerClient({
       responseHeaders: authHeaders,
     });

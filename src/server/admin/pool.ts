@@ -12,10 +12,10 @@ let adminPool: Pool | undefined;
 export function getAdminDatabasePool(): DatabasePool {
   if (adminPool) return adminPool;
 
-  const { dataMode, database } = getServerRuntimeConfig();
-  if (dataMode !== "database") {
+  const { adminOperationsAvailable, database } = getServerRuntimeConfig();
+  if (!adminOperationsAvailable) {
     throw new DatabaseConfigurationError(
-      "管理DB接続はEMANOWA_DATA_MODE=databaseの場合だけ利用できます。",
+      "管理DB接続に必要な環境分類、database mode、origin、Auth、限定接続を確認してください。",
     );
   }
   if (!database.adminConnection || !database.adminConfigured) {
@@ -40,4 +40,25 @@ export function getAdminDatabasePool(): DatabasePool {
     );
   });
   return adminPool;
+}
+
+/** Read-only operational probe for the dedicated emergency/admin boundary.
+ * It verifies the configured role can reach the Stage H function without
+ * creating an actor context or reading any user-generated content. */
+export async function probeAdminDatabase(): Promise<void> {
+  const client = await getAdminDatabasePool().connect();
+  try {
+    const result = await client.query<{ allowed: boolean }>(
+      `select pg_catalog.has_function_privilege(
+         current_user,
+         'app_private.get_admin_world_posting(text)',
+         'execute'
+       ) as allowed`,
+    );
+    if (result.rows[0]?.allowed !== true) {
+      throw new Error("admin operation boundary unavailable");
+    }
+  } finally {
+    client.release();
+  }
 }

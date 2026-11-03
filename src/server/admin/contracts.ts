@@ -18,11 +18,44 @@ import {
   visibilitySchema,
   wishTextSchema,
   worldSlugSchema,
+  worldStateSchema,
 } from "@/domain";
 
 export const reportStateSchema = z.enum(["open", "resolved", "dismissed"]);
 export const resolvedReportStateSchema = z.enum(["resolved", "dismissed"]);
 export const moderationActionSchema = z.enum(["hide", "restore", "delete"]);
+export const worldPostingReasonSchema = z.enum([
+  "abuse",
+  "incident",
+  "maintenance",
+  "capacity",
+  "launch_control",
+  "other",
+]);
+
+export const setWorldPostingInputSchema = z
+  .object({
+    postingEnabled: z.boolean(),
+    reasonCode: worldPostingReasonSchema,
+    expectedPostingEnabled: z.boolean(),
+  })
+  .strict();
+
+export const adminWorldPostingSchema = z
+  .object({
+    worldSlug: worldSlugSchema,
+    worldName: safeDisplayTextSchema.pipe(z.string().min(1).max(100)),
+    state: worldStateSchema,
+    postingEnabled: z.boolean(),
+    opensAt: utcIsoDateTimeSchema,
+    closesAt: utcIsoDateTimeSchema,
+    updatedAt: utcIsoDateTimeSchema,
+  })
+  .strict();
+
+export const adminWorldPostingResponseSchema = z
+  .object({ world: adminWorldPostingSchema })
+  .strict();
 
 export const moderationInputSchema = z
   .object({
@@ -135,3 +168,6 @@ export type AdminReportListResponse = z.infer<
 >;
 export type ModerationReceipt = z.infer<typeof moderationReceiptSchema>;
 export type ReportStateReceipt = z.infer<typeof reportStateReceiptSchema>;
+export type WorldPostingReason = z.infer<typeof worldPostingReasonSchema>;
+export type SetWorldPostingInput = z.infer<typeof setWorldPostingInputSchema>;
+export type AdminWorldPosting = z.infer<typeof adminWorldPostingSchema>;

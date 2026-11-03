@@ -9,7 +9,19 @@ export type PublicCapabilities = {
 export type PublicServiceStatus =
   "ready" | "configuration_required" | "development_demo";
 
+export type PublicOperations = {
+  operatorName: string | null;
+  contactUrl: string | null;
+};
+
+export type PublicRetentionNotices = {
+  content: string | null;
+  backups: string | null;
+  logs: string | null;
+};
+
 export type PublicRuntimeConfig = {
+  environment: "development" | "test" | "staging" | "production";
   appOrigin: string | null;
   featuredWorld: WorldConfig;
   capabilities: PublicCapabilities;
@@ -20,15 +32,23 @@ export type PublicRuntimeConfig = {
   };
   captchaSiteKey: string | null;
   captchaRequired: boolean;
+  operations: PublicOperations;
+  publication: {
+    ready: boolean;
+    policyEffectiveDate: string | null;
+    retention: PublicRetentionNotices;
+  };
   services: {
     status: PublicServiceStatus;
     authConfigured: boolean;
     persistenceConfigured: boolean;
     writesAvailable: boolean;
+    postingAvailable: boolean;
   };
 };
 
 export type PublicRuntimeConfigSource = {
+  environment: PublicRuntimeConfig["environment"];
   appOrigin: string | null;
   featuredWorld: WorldConfig;
   capabilities: PublicCapabilities;
@@ -39,6 +59,11 @@ export type PublicRuntimeConfigSource = {
   serviceStatus: PublicServiceStatus;
   databaseConfigured: boolean;
   writesAvailable: boolean;
+  postingAvailable: boolean;
+  operations: PublicOperations;
+  publicationReady: boolean;
+  policyEffectiveDate: string | null;
+  retention: PublicRetentionNotices;
 };
 
 /**
@@ -53,6 +78,7 @@ export function createPublicRuntimeConfig(
   );
 
   return {
+    environment: source.environment,
     appOrigin: source.appOrigin,
     featuredWorld: source.featuredWorld,
     capabilities: { ...source.capabilities },
@@ -63,11 +89,18 @@ export function createPublicRuntimeConfig(
     },
     captchaSiteKey: source.captchaSiteKey,
     captchaRequired: source.captchaRequired,
+    operations: { ...source.operations },
+    publication: {
+      ready: source.publicationReady,
+      policyEffectiveDate: source.policyEffectiveDate,
+      retention: { ...source.retention },
+    },
     services: {
       status: source.serviceStatus,
       authConfigured,
       persistenceConfigured: source.databaseConfigured,
       writesAvailable: source.writesAvailable,
+      postingAvailable: source.postingAvailable,
     },
   };
 }

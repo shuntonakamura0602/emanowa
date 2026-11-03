@@ -43,5 +43,6 @@ describe("ema image renderer", () => {
         await writeFile(join(previewDirectory, `${variant}.png`), bytes);
       }
     },
+    15_000,
   );
 });

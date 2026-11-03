@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { OwnerDashboard } from "@/components/ema/owner-dashboard";
@@ -5,6 +6,17 @@ import { PageIntro, WorldBreadcrumb } from "@/components/site-shell";
 import { getWorldConfig } from "@/config/worlds";
 import { publicIdSchema } from "@/domain";
 import { getPublicRuntimeConfig } from "@/server/config";
+
+export const metadata: Metadata = {
+  title: "絵馬を管理する",
+  robots: {
+    index: false,
+    follow: false,
+    noarchive: true,
+    noimageindex: true,
+    nosnippet: true,
+  },
+};
 
 export default async function EditEmaPage({
   params,

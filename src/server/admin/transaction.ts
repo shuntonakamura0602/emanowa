@@ -8,5 +8,9 @@ export function withAdminDatabaseTransaction<T>(
   actorId: string,
   operation: (client: DatabaseClient) => Promise<T>,
 ): Promise<T> {
-  return runDatabaseTransaction(getAdminDatabasePool(), { actorId }, operation);
+  return runDatabaseTransaction(
+    getAdminDatabasePool(),
+    { actorId, authAssurance: "aal2" },
+    operation,
+  );
 }

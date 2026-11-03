@@ -48,6 +48,19 @@ export function requireWriteConfiguration(): ServerRuntimeConfig {
   return config;
 }
 
+/** New public posts have a stricter gate than recovery mutations. In a public
+ * environment, owners can still narrow visibility or delete while publication
+ * approval is pending, but creating another public record stays disabled. */
+export function requirePostingConfiguration(): ServerRuntimeConfig {
+  const config = getServerRuntimeConfig();
+  if (!config.postingAvailable) {
+    throw new Error(
+      "新規投稿は現在利用できません。公開準備または受付状態を確認してください。",
+    );
+  }
+  return config;
+}
+
 export type {
   ConfigurationIssue,
   ServerRuntimeConfig,

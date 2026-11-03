@@ -130,7 +130,10 @@ export function EmaReportPanel({
           credentials: "same-origin",
           cache: "no-store",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(captchaToken ? { captchaToken } : {}),
+          body: JSON.stringify({
+            purpose: "report",
+            ...(captchaToken ? { captchaToken } : {}),
+          }),
         });
         const authBody = await safeJson(authResponse);
         if (captchaToken) {

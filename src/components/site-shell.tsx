@@ -30,20 +30,48 @@ export function SiteHeader() {
 }
 
 export function ConnectionNotice() {
-  const { services } = getPublicRuntimeConfig();
-  const connectionMessage =
-    services.status === "ready"
-      ? "地図・一覧・投稿・本人管理・共有・近くへの招待・通報を利用できます。"
-      : services.status === "development_demo"
-        ? "開発用サンプルが選択されています。本番保存や実際の投稿としては扱いません。"
-        : "外部サービスは未接続です。入力画面は確認できますが、保存と本人管理は利用できません。";
+  const { environment, publication, services } = getPublicRuntimeConfig();
+
+  if (environment === "production" && publication.ready) {
+    return null;
+  }
+
+  const notice =
+    environment === "staging"
+      ? {
+          label: "検証環境の表示",
+          title: "検証環境です。",
+          message: services.writesAvailable
+            ? "ここでの操作は公開環境の実績として扱いません。テスト用の内容だけを入力してください。"
+            : "外部サービスの設定が不足しているため、保存を伴う確認は利用できません。",
+        }
+      : environment === "production"
+        ? {
+            label: "公開準備の状態",
+            title: "公開準備中です。",
+            message:
+              "運営情報と公開設定の確認が完了していません。新しい投稿は行わないでください。",
+          }
+        : {
+            label: "開発環境の接続状態",
+            title:
+              services.status === "development_demo"
+                ? "開発用サンプルです。"
+                : "開発環境です。",
+            message:
+              services.status === "ready"
+                ? "ローカルの接続先へ保存します。本番の投稿としては扱いません。"
+                : services.status === "development_demo"
+                  ? "本番保存や実際の投稿としては扱いません。"
+                  : "入力画面は確認できますが、保存と本人管理は利用できません。",
+          };
 
   return (
-    <aside className="connection-notice" aria-label="開発環境の接続状態">
+    <aside className="connection-notice" aria-label={notice.label}>
       <div className="container connection-notice__inner">
         <span className="status-dot" aria-hidden="true" />
         <p>
-          <strong>段階G：品質と障害回復。</strong> {connectionMessage}
+          <strong>{notice.title}</strong> {notice.message}
         </p>
       </div>
     </aside>
@@ -51,6 +79,8 @@ export function ConnectionNotice() {
 }
 
 export function SiteFooter() {
+  const { operations } = getPublicRuntimeConfig();
+
   return (
     <footer className="site-footer">
       <div className="container site-footer__inner">
@@ -62,6 +92,9 @@ export function SiteFooter() {
           <Link href="/about">使い方</Link>
           <Link href="/terms">利用条件</Link>
           <Link href="/privacy">プライバシー</Link>
+          {operations.contactUrl ? (
+            <a href={operations.contactUrl}>お問い合わせ</a>
+          ) : null}
         </nav>
       </div>
     </footer>

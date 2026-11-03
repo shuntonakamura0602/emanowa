@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const validUserId = "00000000-0000-4000-8000-000000000000";
 const scriptPath = path.join(process.cwd(), "scripts", "manage-admin.mjs");
+const cliProcessTimeoutMs = 10_000;
 type EnvironmentOverrides = Readonly<Record<string, string | undefined>>;
 
 function runWithMigrationUrl(
@@ -19,7 +20,7 @@ function runWithMigrationUrl(
     {
       encoding: "utf8",
       env: { ...process.env, ...environment, MIGRATION_DATABASE_URL: url },
-      timeout: 3_000,
+      timeout: cliProcessTimeoutMs,
     },
   );
 }
@@ -90,7 +91,7 @@ async function captureStartupParameters(
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(
           () => reject(new Error("startup packet timeout")),
-          3_000,
+          cliProcessTimeoutMs,
         );
       }),
     ]);

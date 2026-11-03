@@ -12,6 +12,8 @@ const UID = "11111111-1111-4111-8111-111111111111";
 const developmentConfig: AnonymousEndpointConfig = {
   environment: "development",
   appOrigin: "https://emanowa.test",
+  postingAvailable: true,
+  writesAvailable: true,
   supabase: {
     url: "https://project.supabase.co",
     publishableKey: "publishable-key",
@@ -127,6 +129,47 @@ describe("anonymous session endpoint", () => {
     const response = await POST(request('{"captchaToken":"token"}'));
 
     expect(response.status).toBe(503);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("does not create an Auth user while public posting is gated", async () => {
+    const config: AnonymousEndpointConfig = {
+      ...developmentConfig,
+      environment: "production",
+      postingAvailable: false,
+      captcha: { configured: true, required: true },
+    };
+    const { POST, createClient } = handler(config);
+    const response = await POST(request('{"captchaToken":"token"}'));
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("TEMPORARILY_UNAVAILABLE");
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("still creates a report session while only new posting is gated", async () => {
+    const config: AnonymousEndpointConfig = {
+      ...developmentConfig,
+      environment: "production",
+      postingAvailable: false,
+      writesAvailable: true,
+      captcha: { configured: true, required: true },
+    };
+    const { POST, createClient } = handler(config);
+    const response = await POST(
+      request('{"purpose":"report","captchaToken":"token"}'),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createClient).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unknown anonymous-session purpose before Auth", async () => {
+    const { POST, createClient } = handler();
+    const response = await POST(request('{"purpose":"admin"}'));
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.fieldErrors).toHaveProperty("purpose");
     expect(createClient).not.toHaveBeenCalled();
   });
 

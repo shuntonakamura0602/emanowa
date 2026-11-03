@@ -2,11 +2,13 @@ import Link from "next/link";
 
 import { EmaShape } from "@/components/site-shell";
 import { FEATURED_WORLD_SLUG } from "@/config/worlds";
+import { getPublicRuntimeConfig } from "@/server/config";
 
 const featuredWorldSlug = FEATURED_WORLD_SLUG;
 
 export default function HomePage() {
   const worldPath = "/w/" + encodeURIComponent(featuredWorldSlug);
+  const { services } = getPublicRuntimeConfig();
 
   return (
     <>
@@ -18,15 +20,23 @@ export default function HomePage() {
             みんなの願いが集まる、オンライン絵馬。登録画面を先に通らず、無料で一枚から始められる場所をつくっています。
           </p>
           <div className="hero__actions">
-            <Link className="button" href={worldPath + "/new"}>
-              絵馬を書く
-            </Link>
+            {services.postingAvailable ? (
+              <Link className="button" href={worldPath + "/new"}>
+                絵馬を書く
+              </Link>
+            ) : (
+              <span className="button" aria-disabled="true">
+                新規投稿は準備中です
+              </span>
+            )}
             <Link className="button button--secondary" href={worldPath}>
               みんなの絵馬を眺める
             </Link>
           </div>
           <p className="fine-print">
-            地図・一覧・投稿・本人管理に加え、公開範囲を守った共有と近くへの招待を利用できます。
+            {services.postingAvailable
+              ? "地図・一覧・投稿・本人管理に加え、公開範囲を守った共有と近くへの招待を利用できます。"
+              : "地図と一覧は閲覧できます。新規投稿は公開準備の確認が完了してから利用できます。"}
           </p>
         </div>
         <div className="hero__visual" aria-hidden="true">

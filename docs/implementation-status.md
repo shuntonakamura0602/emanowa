@@ -342,3 +342,60 @@ DB migration / 設定変更:
 
 次に実装する段階:
 : 段階H「公開環境の準備」。staging/production設定、world受付期間、ドメイン、運営情報、監視、cloud backup/PITR、復旧台帳、受付停止、公開環境の投稿・共有・本人管理・削除・通報E2Eを確定する。
+
+## 段階H — 公開環境の準備
+
+対象段階:
+: P0 段階H「公開環境の準備」（リポジトリ内実装と段階B〜Hのローカル全体回帰は完了。外部設定と実環境E2E待ちのため公開判定はNO-GO）
+
+実装した体験:
+: `writesAvailable`、`postingAvailable`、`publicationReady`、`adminOperationsAvailable` を分離した。production/stagingは明示したdatabase mode、HTTPSの非loopback origin、browser用Supabase key、通常/admin限定DB、CAPTCHA、32byte以上のrate-limit secret、信頼proxy段数、P0 feature flag無効、実運営者・問い合わせ先、規約適用日、投稿・backup・logの保存説明を検証する。productionは条件付き検証・公開承認後の `PUBLICATION_APPROVED=true` も必須とし、不足や仮文言があれば新規投稿、readiness、indexingを閉じる。公開文面や承認の不足だけでは、既存ownerの削除・公開範囲縮小、通報、管理操作を止めない。
+
+: 新規投稿APIと投稿用匿名Authだけを公開gateへ接続した。匿名Auth bodyは `post` / `report` の用途を厳格に区別し、公開未承認時も通常のwrite依存が健全なら通報用sessionを開始できる。ホーム、world地図、新規画面から停止中の投稿導線を除き、直接POSTも503で拒否する。P0未提供機能を有効にした設定、public環境のloopback、秘密Supabase key、demo fallbackを拒否する。
+
+: about、terms、privacyを実設定からserver描画し、独立した参加型サービスであること、public/unlistedとpublic/owner_only、限定URLの限界、削除・第三者cache、backup復旧後の再非公開化、実際の保存説明と問い合わせを掲示する。production公開承認前と全stagingへroot noindexと全体robots拒否を付け、承認済みproductionだけがtop/about/terms/privacy/featured worldのsitemapを公開する。`/admin`、`/me`、作成・編集画面は常に検索対象外である。
+
+: `/api/health/live`、通常公開経路の `/api/health/ready`、緊急管理DB境界の `/api/health/operations` を追加した。bodyは `live` / `ready` / `not_ready` のstatus一項目だけで、設定名、接続先、内部例外、本文を返さない。通常readyとoperationsを分け、管理DB障害だけで閲覧や本人削除までload balancerから外さない。全応答へ基本security headerを付け、Next.jsのpowered-byを除き、server error logをmethod・route pattern・opaque digestだけに限定した。HSTSは実配信基盤のproduction応答でpreflight必須、CSPはTurnstile/Auth/Next.jsをstaging検証するまで警告付き未導入とした。
+
+: fresh Auth、確認済みメール、TOTP AAL2、有効な管理者台帳、管理専用DB roleを満たす管理者が、world単位で新規受付を停止・再開できる画面とAPIを追加した。期待する現在値、UUID v4の冪等key、固定理由、対象一行の短いlockを必須にし、admin/world内部ID、pause/resume、理由code、前後boolean、時刻だけをappend-only監査へ残す。停止中も閲覧、owner削除・公開縮小、通報を維持する。冪等replay後はUIが現在値をGETで再確認し、別操作後の古いreceiptを現在値として表示しない。
+
+: provider-neutralな公開手順、migration、custom SMTP/Auth URL、Turnstile、MFA管理者、backup/PITR/privacy replay、監視・通知・費用、緊急停止、rollback、staging E2E/cleanup、条件付きproduction検証windowを `docs/stage-h-setup.md` と `docs/launch-checklist.md` に整備した。GET-only preflightは明示origin以外へのredirect、Cookie、認証情報、body、書込みを使わず、health、公開ページ、world契約、security header、robots、sitemapの完全な許可集合を検査する。
+
+主な変更ファイル:
+: `supabase/migrations/20261103070504_stage_h_world_posting_operations.sql`、`supabase/tests/database/stage_h_world_posting_operations.test.sql`、`src/server/config/`、`src/config/public.ts`、`src/app/api/health/`、`src/app/api/v1/admin/worlds/`、`src/server/admin/`、`src/components/admin/admin-world-posting-control.tsx`、`src/app/{about,terms,privacy,robots,sitemap}.ts*`、`src/instrumentation.ts`、`scripts/stage-h-integration.mjs`、`scripts/stage-h-preflight.mjs`、`docs/stage-h-setup.md`、`docs/launch-checklist.md`
+
+DB migration / 設定変更:
+: `worlds.updated_at` とFORCE RLSの `world_operation_audit` を追加した。管理者UID、world内部ID、列挙action/reason、前後boolean、時刻だけを保存し、願い本文、表示名、メール、通報補足、自由記述を持たない。AAL2と有効台帳を関数内でも再確認する固定search pathの `get_admin_world_posting` / `set_world_posting` を管理roleだけへ許可し、通常/Data API roleと直接table権限を拒否した。worldと冪等keyをtransaction内で直列化し、expected-current競合は既存の409契約、同じkey/bodyは元receipt、別bodyは拒否する。
+
+: `PUBLICATION_APPROVED`、`POLICY_EFFECTIVE_DATE`、`CONTENT_RETENTION_NOTICE`、`BACKUP_RETENTION_NOTICE`、`LOG_RETENTION_NOTICE` を追加し、既存の `OPERATOR_NAME`、`CONTACT_URL` を公開準備gateへ接続した。`.env.example` に秘密値や仮の運営情報は入れていない。公開値はallow-listした情報だけをclientへ渡し、approval内部値、設定issue、DB URL、CAPTCHA/HMAC秘密はserializeしない。
+
+: ローカル統合試験はDB直結、Auth、Kong、PostgRESTを使い、接続poolerを使わない。Docker高負荷時に任意のSupavisor health checkだけで起動不能にならないよう、`pnpm supabase:start` は `supavisor` も除外した。段階Gの2回目の大量Auth fixture前には `pnpm db:reset` を挟み、前半試験が作る約1,000ユーザーの残留によるAuth timeoutを避ける。
+
+: transaction-localのactor、限定公開lookup ID、AALを3本の個別SQLではなく1本のparameterized `set_config` SQLで必ず初期化するようにした。空値で前transactionの能力を消す契約とtransaction境界を維持しつつ、段階HのAAL追加で増えたDB往復を削減した。通常/admin poolの接続数上限やrate-limit transactionの意味は変更していない。
+
+検証した経路と結果:
+: Node.js `24.22.1`、pnpm `11.25.0`、Next.js `16.4.3`、ローカルSupabase/Postgres、Google Chrome headlessで検証した。`pnpm check` はPrettier、ESLint、TypeScriptとVitest 52ファイル・355件の最終全件に成功し、production-readyのダミー値を使う `pnpm build` も成功した。公開情報は検証用値だけで、実運営情報として採用していない。共有CPU負荷で既存の子process/PNG試験が固定3秒/5秒を超える偽陰性を起こしたため、機能条件は変えず試験専用timeoutを10秒/15秒へ拡張し、対象14件と全355件の両方を再成功させた。
+
+: clean DBのmigration適用後、pgTAPは段階B context 2件・private schema 48件、段階C 58件、段階D 48件、段階E 30件、段階F 74件、段階H 38件、合計298件がすべて成功した。`app_private` のDB lintはwarningも失敗扱いで0件だった。段階Hの実別接続試験では、同じexpected値の別key同時pauseが成功1件・`P1009` 1件、同key/body同時再送がoriginal 1件・replay 1件かつ監査増分1件、pause応答後の作成が `P1004`、公開worldが `accepting_posts=false` になることを確認した。cleanupでは同じAAL2管理関数でfixture worldを受付中へ戻し、一時LOGIN化した通常/admin roleはNOLOGIN・password nullへ戻したことを `pg_authid` で再確認した。
+
+: clean DBから標準の `pnpm test:stage-h` を0終了させた。全migration、pgTAP 298件、DB lint 0件、段階B〜FのDB/Auth/HTTP統合、中間DB reset、段階Dの公開1,000件・密集400件・公開境界、段階Gの実ブラウザー・障害注入・backup/restoreと再非公開化、段階H同時操作を同じ一括commandで完走した。分割実行でも同じ段階G復旧と段階H境界を再確認した。
+
+: 一括回帰の段階Dは密集chunk p95 116.79ms、overview p95 18.98ms、feed p95 28.73msだった。段階Gは密集chunk p95 119.86ms、独立匿名20人の同時投稿20/20件成功・receipt一意・p95 317.84msで2秒目標内、mobile 4G/CPU×4のLCP 752ms、転送244,386 bytes、密集地図10秒60.19fpsだった。共有Docker高負荷時には基準超過を再現したが閾値やpool上限は緩めず、DB往復削減と招待候補fetchの上限付き待機を反映後、競合のない状態で後続ブラウザー項目まで完走した。
+
+: 読み取り専用preflightはstaging loopback mockで11/11件成功し、HSTS/CSP不足だけを想定どおり警告した。ready 503、redirect、不正URL、production HTTP/HTTPS loopback、不正world slugを実行前または検査失敗として拒否した。body読了までtimeoutを維持し、production sitemapの余分なprivate URLも拒否する。実production originには接続していない。
+
+実行していない検証と理由:
+: 実production/staging domain、host、cloud Supabase、custom SMTP、Turnstile、実proxy chain、管理者UUID/TOTP、backup/PITR/privacy replay保存先、監視・通知・費用上限が未設定である。このため実Supavisor/SSL/network restriction、メール到達、CAPTCHA、operations monitor、restore drill、cloud性能は未確認で、公開承認は行っていない。
+
+: stagingの二browser session、実端末touch/pinch、VoiceOver/TalkBack、X/LINE/Clipboard/SNS crawler、実providerの投稿・共有・本人編集・削除・通報・管理確認とcleanupは未実施である。条件付きproduction検証windowのread-only preflight、識別済みtest投稿1件、通報、cleanup、実績除外も未承認・未実施であるため、仕様の公開環境完成条件は未達のままにする。
+
+仕様からの変更と理由:
+: P0の機能・所有権・公開範囲・同時投稿制約は弱めていない。公開可否と既存データの安全側操作を分離する判断、AAL2管理境界のworld単位停止、内容非依存のhealth/preflightを `docs/decisions.md` のADR-H-001〜003へ記録した。通常readyとoperations readyの分離は、管理障害で閲覧・本人削除を止めず、公開前検査では緊急停止能力も必須にするためである。
+
+既知の問題・外部設定が必要な項目:
+: 実ドメイン、cloud project/region/plan、通常/admin/migration credential、Auth redirect、SMTP sender/SPF/DKIM/DMARC、Turnstile、proxy/HMAC、実world日程、運営者・問い合わせ・保存方針、管理者MFA、backup/PITR/privacy台帳、RPO/RTO、監視/on-call/費用通知を実値と証跡で確定する必要がある。仮値、localhost、仕様例の日程ではapprovalを有効にしない。
+
+: 条件付きproduction検証は、staging完了後にworldをAAL2管理APIで停止し、明示承認後だけapprovalを有効化してread-only preflightを通す。その後の短いwindowだけworldを再開し、識別済みtest投稿・通報・cleanup・実績除外を行う。失敗時はworld停止を維持してapprovalをfalseへ戻し再deployする。現在の最終判断は `NO-GO` である。
+
+次に進む段階:
+: 外部設定とstaging/production証跡をそろえ、段階Hの公開環境完成条件を満たす。これが完了するまでP1の機能flagは有効化せず、P1実装へ進んだとは扱わない。

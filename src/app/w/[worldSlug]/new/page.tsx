@@ -24,17 +24,16 @@ export async function generateMetadata({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }): Promise<Metadata> {
   const query = await searchParams;
-  return query.near === undefined
-    ? { title: "願いを書く" }
-    : {
-        title: "近くに願いを書く",
-        robots: {
-          index: false,
-          follow: false,
-          noarchive: true,
-          noimageindex: true,
-        },
-      };
+  return {
+    title: query.near === undefined ? "願いを書く" : "近くに願いを書く",
+    robots: {
+      index: false,
+      follow: false,
+      noarchive: true,
+      noimageindex: true,
+      nosnippet: true,
+    },
+  };
 }
 
 export default async function NewEmaPage({
@@ -48,8 +47,24 @@ export default async function NewEmaPage({
   if (!getWorldConfig(worldSlug)) {
     notFound();
   }
-  const query = await searchParams;
   const runtimeConfig = getPublicRuntimeConfig();
+  if (!runtimeConfig.services.postingAvailable) {
+    return (
+      <section className="container page-section">
+        <WorldBreadcrumb worldSlug={worldSlug} current="絵馬を書く" />
+        <PageIntro
+          eyebrow="新規投稿"
+          title="現在は新しい絵馬を受け付けていません"
+        >
+          <p>
+            公開準備または接続状態の確認が完了するまで、新規投稿を停止しています。すでに掛けた絵馬の確認・公開範囲の変更・削除は本人管理から続けられます。
+          </p>
+        </PageIntro>
+      </section>
+    );
+  }
+
+  const query = await searchParams;
   const inviteContext =
     query.near === undefined
       ? null

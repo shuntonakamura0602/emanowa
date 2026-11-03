@@ -5,19 +5,28 @@ import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
 import { z } from "zod";
 
-import { idempotencyKeySchema, publicIdSchema, uuidV4Schema } from "@/domain";
+import {
+  idempotencyKeySchema,
+  publicIdSchema,
+  uuidV4Schema,
+  worldSlugSchema,
+} from "@/domain";
 import type { DatabaseClient } from "@/server/db/types";
 import { actorIdSchema } from "@/server/db/validation";
 import {
   adminReportSchema,
+  adminWorldPostingSchema,
   moderationInputSchema,
   moderationReceiptSchema,
   reportStateReceiptSchema,
   reportStateSchema,
+  setWorldPostingInputSchema,
   updateReportInputSchema,
   type AdminReport,
+  type AdminWorldPosting,
   type ModerationInput,
   type ReportState,
+  type SetWorldPostingInput,
   type UpdateReportInput,
 } from "./contracts";
 import type { AdminReportCursor } from "./cursor";
@@ -66,6 +75,17 @@ interface AdminCheckRow extends QueryResultRow {
   allowed: boolean;
 }
 
+interface AdminWorldPostingRow extends QueryResultRow {
+  world_slug: string;
+  world_name: string;
+  state: string;
+  posting_enabled: boolean;
+  opens_at: DatabaseTimestamp;
+  closes_at: DatabaseTimestamp;
+  updated_at: DatabaseTimestamp;
+  replayed?: boolean;
+}
+
 function asUtcIso(value: DatabaseTimestamp): string {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) throw new Error("invalid timestamp");
@@ -103,6 +123,20 @@ export function mapAdminReportRow(row: AdminReportRow): AdminReport {
   });
 }
 
+export function mapAdminWorldPostingRow(
+  row: AdminWorldPostingRow,
+): AdminWorldPosting {
+  return adminWorldPostingSchema.parse({
+    worldSlug: row.world_slug,
+    worldName: row.world_name,
+    state: row.state,
+    postingEnabled: row.posting_enabled,
+    opensAt: asUtcIso(row.opens_at),
+    closesAt: asUtcIso(row.closes_at),
+    updatedAt: asUtcIso(row.updated_at),
+  });
+}
+
 export async function isCurrentAdmin(actorIdInput: string): Promise<boolean> {
   const actorId = actorIdSchema.parse(actorIdInput);
   return withAdminDatabaseTransaction(actorId, async (client) => {
@@ -111,6 +145,22 @@ export async function isCurrentAdmin(actorIdInput: string): Promise<boolean> {
     );
     return result.rows[0]?.allowed === true;
   });
+}
+
+export async function getAdminWorldPosting(
+  actorIdInput: string,
+  worldSlugInput: string,
+): Promise<AdminWorldPosting | null> {
+  const actorId = actorIdSchema.parse(actorIdInput);
+  const worldSlug = worldSlugSchema.parse(worldSlugInput);
+  const row = await withAdminDatabaseTransaction(actorId, async (client) => {
+    const result = await client.query<AdminWorldPostingRow>(
+      "select * from app_private.get_admin_world_posting($1::text)",
+      [worldSlug],
+    );
+    return result.rows[0] ?? null;
+  });
+  return row ? mapAdminWorldPostingRow(row) : null;
 }
 
 async function queryAdminReports(
@@ -260,4 +310,56 @@ export async function updateReportState(
     state: row.state,
     version: asInteger(row.version),
   });
+}
+
+function worldPostingRequestHash(
+  worldSlug: string,
+  input: SetWorldPostingInput,
+): Buffer {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        path: `/api/v1/admin/worlds/${worldSlug}/posting`,
+        method: "PATCH",
+        body: {
+          postingEnabled: input.postingEnabled,
+          reasonCode: input.reasonCode,
+          expectedPostingEnabled: input.expectedPostingEnabled,
+        },
+      }),
+      "utf8",
+    )
+    .digest();
+}
+
+export async function setAdminWorldPosting(
+  actorIdInput: string,
+  worldSlugInput: string,
+  inputValue: unknown,
+  idempotencyKeyInput: string,
+): Promise<AdminWorldPosting> {
+  const actorId = actorIdSchema.parse(actorIdInput);
+  const worldSlug = worldSlugSchema.parse(worldSlugInput);
+  const input = setWorldPostingInputSchema.parse(inputValue);
+  const idempotencyKey = idempotencyKeySchema.parse(idempotencyKeyInput);
+  const requestHash = worldPostingRequestHash(worldSlug, input);
+
+  const row = await withAdminDatabaseTransaction(actorId, async (client) => {
+    const result = await client.query<AdminWorldPostingRow>(
+      `select * from app_private.set_world_posting(
+         $1::text, $2::boolean, $3::text, $4::boolean, $5::uuid, $6::bytea
+       )`,
+      [
+        worldSlug,
+        input.postingEnabled,
+        input.reasonCode,
+        input.expectedPostingEnabled,
+        idempotencyKey,
+        requestHash,
+      ],
+    );
+    return result.rows[0];
+  });
+  if (!row) throw new Error("world posting result missing");
+  return mapAdminWorldPostingRow(row);
 }

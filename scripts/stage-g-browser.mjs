@@ -399,10 +399,12 @@ async function verifyResponsiveAndAccessibility(browser, baseUrl, publicId) {
         .getByRole("heading", { name: "友達の絵馬の近くに掛ける" })
         .waitFor();
       const candidates = page.getByLabel("近くの場所候補").getByRole("button");
-      assert(
-        (await candidates.count()) > 0,
-        "390px invite did not expose a nearby candidate",
-      );
+      await candidates
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .catch(() => {
+          throw new Error("390px invite did not expose a nearby candidate");
+        });
       await candidates.first().click();
     }
     await assertResponsiveLayout(page, `390px ${label}`);
@@ -426,10 +428,12 @@ async function verifyResponsiveAndAccessibility(browser, baseUrl, publicId) {
   const desktopCandidates = invitePage
     .getByLabel("近くの場所候補")
     .getByRole("button");
-  assert(
-    (await desktopCandidates.count()) > 0,
-    "1440px invite did not expose a nearby candidate",
-  );
+  await desktopCandidates
+    .first()
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .catch(() => {
+      throw new Error("1440px invite did not expose a nearby candidate");
+    });
   await desktopCandidates.first().click();
   await assertResponsiveLayout(invitePage, "1440px invite");
   await assertAccessible(invitePage, "1440px invite");

@@ -658,9 +658,10 @@ export function NewEmaFlow({
             credentials: "same-origin",
             cache: "no-store",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(
-              challengeToken ? { captchaToken: challengeToken } : {},
-            ),
+            body: JSON.stringify({
+              purpose: "post",
+              ...(challengeToken ? { captchaToken: challengeToken } : {}),
+            }),
           });
         };
         const response = options.lockHeld

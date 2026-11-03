@@ -92,7 +92,13 @@ const EMPTY_VIEWPORT: Viewport = { width: 0, height: 0 };
 const MAX_CHUNK_RESPONSE_BYTES = 4 * 1_024 * 1_024;
 const PUBLIC_MAP_REFRESH_MS = 30_000;
 
-export function WorldExplorer({ worldSlug }: { worldSlug: string }) {
+export function WorldExplorer({
+  worldSlug,
+  postingAvailable,
+}: {
+  worldSlug: string;
+  postingAvailable: boolean;
+}) {
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mapPanelRef = useRef<HTMLElement>(null);
@@ -963,7 +969,10 @@ export function WorldExplorer({ worldSlug }: { worldSlug: string }) {
   return (
     <>
       <div className="action-row world-actions">
-        {worldState === "ready" && acceptingPosts && !isFull ? (
+        {postingAvailable &&
+        worldState === "ready" &&
+        acceptingPosts &&
+        !isFull ? (
           <Link
             className="button"
             href={`/w/${encodeURIComponent(worldSlug)}/new`}
@@ -973,13 +982,15 @@ export function WorldExplorer({ worldSlug }: { worldSlug: string }) {
           </Link>
         ) : (
           <span className="button" aria-disabled="true">
-            {worldState === "loading"
-              ? "受付状況を確認中…"
-              : isFull
-                ? "満員です"
-                : worldState === "error"
-                  ? "受付状況を確認できません"
-                  : "現在は受付していません"}
+            {!postingAvailable
+              ? "新規投稿は準備中です"
+              : worldState === "loading"
+                ? "受付状況を確認中…"
+                : isFull
+                  ? "満員です"
+                  : worldState === "error"
+                    ? "受付状況を確認できません"
+                    : "現在は受付していません"}
           </span>
         )}
         <button
@@ -1157,6 +1168,7 @@ export function WorldExplorer({ worldSlug }: { worldSlug: string }) {
                     </button>
                   ) : null}
                   {selectionInfo.kind === "empty" &&
+                  postingAvailable &&
                   acceptingPosts &&
                   !isFull ? (
                     <Link

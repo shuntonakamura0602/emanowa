@@ -6,16 +6,34 @@ import {
   SiteFooter,
   SiteHeader,
 } from "@/components/site-shell";
+import { getPublicRuntimeConfig } from "@/server/config";
 
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: {
-    default: "えまのわ",
-    template: "%s | えまのわ",
-  },
-  description: "みんなの願いが集まる、オンライン絵馬。",
-};
+export function generateMetadata(): Metadata {
+  const config = getPublicRuntimeConfig();
+  const indexable =
+    config.environment === "production" && config.publication.ready;
+
+  return {
+    title: {
+      default: "えまのわ",
+      template: "%s | えまのわ",
+    },
+    description: "みんなの願いが集まる、オンライン絵馬。",
+    ...(indexable
+      ? {}
+      : {
+          robots: {
+            index: false,
+            follow: false,
+            noarchive: true,
+            noimageindex: true,
+            nosnippet: true,
+          },
+        }),
+  };
+}
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

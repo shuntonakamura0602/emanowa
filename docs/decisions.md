@@ -243,3 +243,33 @@ backupは取得後に行われたhide、delete、公開範囲縮小を含まな�
 再適用の正本はbackupとは別のappend-only台帳とし、`publicId`、`hide|delete`、expected version、Idempotency-Key、列挙済み理由だけを保持する。願い本文、表示名、メール、通報補足、Auth token、DB内部IDは入れない。台帳の本番保存先、暗号化、保持期間、改ざん防止、アクセス権、担当と承認は段階Hで環境ごとに確定する。
 
 restore後は通常/admin roleの資格情報と権限分離を再構成し、同じversion・冪等性・監査を持つ管理用moderation関数で台帳を再生する。API、HTML、RSC、metadata、OG/PNG、一覧、random、nearby、対象chunk、CDNを確認し、削除・非公開化した内容が出ないことを配信再開前に検証する。ローカル訓練は古い論理backupによる公開巻き戻しを実際に再現してからhide/deleteを再適用し、この順序とfail-private条件を検証する。
+
+## ADR-H-001: 公開可否と既存データの回復操作を別のgateにする
+
+- 状態: 採用
+- 日付: 2026-11-03
+- 関連仕様: 07 段階H・公開前チェック「接続」「内容」「運用」
+
+staging/productionの公開可否は、HTTPS origin、限定DB/Auth/CAPTCHA/rate limit、運営者・問い合わせ先、適用日、内容・backup・logの保存説明、P0 feature flags、productionの明示承認をまとめた `publicationReady` で判定する。公開文面や運営値をリポジトリの仮値で補わず、不足時はhealth readinessと公開前preflightを失敗させる。`PUBLICATION_APPROVED=true` は外部のSMTP、Auth URL、backup/PITR、監視、管理者、world日程をチェックリストで確認した最終go/no-go後だけ設定する。
+
+一方、公開文面の不足だけで本人の削除・公開範囲縮小、通報、管理者の非表示、緊急停止まで止めない。依存先へ安全に接続できる `writesAvailable` と、一般向けの新規投稿を許可する公開gateを分離する。production/stagingの新規投稿は公開gateを満たす場合だけ許可し、既存データを安全側へ変更する操作は必要な認証・所有権・DB境界を保ったまま利用できるようにする。
+
+## ADR-H-002: 緊急停止はAAL2管理境界からworld単位で監査する
+
+- 状態: 採用
+- 日付: 2026-11-03
+- 関連仕様: 04 §6.2、07 段階H・OPS-01・公開前チェック「運用」
+
+緊急時はサービスやworld全体を削除・archiveせず、対象worldの `posting_enabled` だけをpause/resumeする。通常経路はfresh Auth、確認済みメール、AAL2、現在有効な `admin_users`、管理専用DB roleをすべて再確認する管理APIとする。要求は4桁slug、列挙理由、期待する現在値、Idempotency-Key、request hashだけを受け、対象worldを短いtransactionで一行ロックする。古い期待値は409とし、同じ要求の再送は元の結果を返す。
+
+監査表はadmin/world内部ID、pause/resume、列挙理由、前後boolean、時刻だけをappend-onlyで保持し、願い本文、表示名、メール、通報補足、自由記述を保存しない。通常/admin app roleにはworld・監査表の直接権限を与えず、固定search pathの関数だけを実行可能にする。停止中も公開閲覧、本人削除、公開範囲縮小、通報、管理操作を維持し、再開してもworld stateと受付期間を満たすまで新規投稿は受け付けない。Auth/UIが使えない場合の生SQLは、対象一行・承認・記録・事後照合を必須にしたbreak-glass手順だけに限定する。
+
+## ADR-H-003: 公開前検査と監視は読み取り専用かつ内容非依存にする
+
+- 状態: 採用
+- 日付: 2026-11-03
+- 関連仕様: 04 §12・§13、07 段階H・公開前チェック「計測」
+
+`/api/health/live` はprocess応答だけ、`/api/health/ready` は公開設定と通常の公開DB依存を確認する。管理DB障害だけで閲覧・本人削除までload balancerから外さないため、緊急停止に必要な管理専用DBは `/api/health/operations` で独立して確認し、公開前preflightと運用監視では両方を必須にする。公開bodyは正確なstatus一項目だけにし、不足キー、接続先、例外、SQL、secretを返さない。server errorの標準logもmethod、アプリのroute pattern、opaque digestだけに限定し、request path/query、header、Cookie、本文、表示名、メール、公開IDを送らない。
+
+公開前preflightは明示したoriginへGETだけを送り、redirect、Cookie、認証情報、request body、production書込みを使わない。health、主要公開ページ、world契約、robots、基本security headerを確認し、productionのHSTSは配信基盤を含む実応答で必須とする。CSPはTurnstile、Supabase Auth、Next.js hydrationと共有画像をstagingで検証せず一律導入しない。hostと監視providerが未確定な間はprovider-neutralな契約とrunbookを正本にし、外部alert、backup、SMTP、staging/production E2Eは証跡が得られるまで未完了として扱う。

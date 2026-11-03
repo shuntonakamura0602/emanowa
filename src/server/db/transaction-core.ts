@@ -16,6 +16,7 @@ export async function runDatabaseTransaction<T>(
   const publicLookupId = context.publicLookupId
     ? publicIdSchema.parse(context.publicLookupId)
     : "";
+  const authAssurance = context.authAssurance === "aal2" ? "aal2" : "";
 
   let client: DatabaseClient;
   try {
@@ -30,12 +31,13 @@ export async function runDatabaseTransaction<T>(
   try {
     await client.query("begin");
     transactionStarted = true;
-    await client.query("select set_config('app.actor_id', $1, true)", [
-      actorId,
-    ]);
-    await client.query("select set_config('app.lookup_public_id', $1, true)", [
-      publicLookupId,
-    ]);
+    await client.query(
+      `select
+         set_config('app.actor_id', $1, true),
+         set_config('app.lookup_public_id', $2, true),
+         set_config('app.auth_aal', $3, true)`,
+      [actorId, publicLookupId, authAssurance],
+    );
 
     const result = await operation(client);
     await client.query("commit");

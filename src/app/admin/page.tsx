@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { AdminDashboard } from "@/components/admin/admin-dashboard";
 import { AdminMfaSetup } from "@/components/admin/admin-mfa-setup";
+import { AdminWorldPostingControl } from "@/components/admin/admin-world-posting-control";
 import { getAdminPageAuthState } from "@/server/admin/auth";
 import { isCurrentAdmin } from "@/server/admin/repository";
 import { getPublicRuntimeConfig } from "@/server/config";
@@ -92,7 +93,14 @@ export default async function AdminPage() {
           </p>
         </div>
       </div>
-      {gate === "authorized" ? <AdminDashboard /> : null}
+      {gate === "authorized" ? (
+        <>
+          <AdminWorldPostingControl
+            worldSlug={publicConfig.featuredWorld.slug}
+          />
+          <AdminDashboard />
+        </>
+      ) : null}
       {gate === "mfa" &&
       publicConfig.supabase.url &&
       publicConfig.supabase.publishableKey ? (

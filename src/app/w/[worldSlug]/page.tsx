@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { PageIntro, WorldBreadcrumb } from "@/components/site-shell";
 import { WorldExplorer } from "@/components/world/world-explorer";
 import { getWorldConfig } from "@/config/worlds";
+import { getPublicRuntimeConfig } from "@/server/config";
 
 export default async function WorldPage({
   params,
@@ -13,6 +14,7 @@ export default async function WorldPage({
   if (!getWorldConfig(worldSlug)) {
     notFound();
   }
+  const { services } = getPublicRuntimeConfig();
   return (
     <section className="container page-section">
       <WorldBreadcrumb worldSlug={worldSlug} current="絵馬を眺める" />
@@ -22,7 +24,10 @@ export default async function WorldPage({
         </p>
       </PageIntro>
 
-      <WorldExplorer worldSlug={worldSlug} />
+      <WorldExplorer
+        worldSlug={worldSlug}
+        postingAvailable={services.postingAvailable}
+      />
     </section>
   );
 }

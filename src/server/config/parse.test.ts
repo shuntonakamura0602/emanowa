@@ -18,6 +18,20 @@ const configuredEnvironment = {
   RATE_LIMIT_HMAC_SECRET: "rate-limit-secret-sentinel",
 };
 
+const publicationEnvironment = {
+  APP_ORIGIN: "https://emanowa.test",
+  ADMIN_DATABASE_URL:
+    "postgresql://emanowa_admin_app:secret@localhost:5432/emanowa",
+  TRUSTED_PROXY_HOPS: "1",
+  OPERATOR_NAME: "えまのわ運営テスト",
+  CONTACT_URL: "https://support.emanowa.test/contact",
+  POLICY_EFFECTIVE_DATE: "2026-11-03",
+  CONTENT_RETENTION_NOTICE:
+    "投稿内容は削除されるまで保存し、削除後は稼働DBから消去します。",
+  BACKUP_RETENTION_NOTICE: "バックアップは作成から30日後に削除します。",
+  LOG_RETENTION_NOTICE: "アクセスログは取得から90日後に削除します。",
+};
+
 describe("parseServerEnvironment", () => {
   it("defaults all future capabilities to false", () => {
     const config = parseServerEnvironment({});
@@ -31,6 +45,8 @@ describe("parseServerEnvironment", () => {
     expect(config.dataMode).toBe("unconfigured");
     expect(config.serviceStatus).toBe("configuration_required");
     expect(config.writesAvailable).toBe(false);
+    expect(config.postingAvailable).toBe(false);
+    expect(config.publicationReady).toBe(false);
   });
 
   it("accepts an explicitly configured database environment", () => {
@@ -46,6 +62,7 @@ describe("parseServerEnvironment", () => {
     });
     expect(config.serviceStatus).toBe("ready");
     expect(config.writesAvailable).toBe(true);
+    expect(config.postingAvailable).toBe(true);
     expect(config.database.connection?.roleName).toBe("emanowa_app");
     expect(config.captcha.configured).toBe(true);
     expect(toPublicRuntimeConfigSource(config).captchaRequired).toBe(false);
@@ -79,6 +96,72 @@ describe("parseServerEnvironment", () => {
     ).toBe("https://example.com");
   });
 
+  it("accepts only a bare Supabase origin and requires HTTPS publicly", () => {
+    const local = parseServerEnvironment({
+      ...configuredEnvironment,
+      NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321/",
+    });
+    expect(local.supabase.url).toBe("http://127.0.0.1:54321");
+
+    for (const supabaseUrl of [
+      "https://user:secret@example.supabase.co",
+      "https://example.supabase.co/rest/v1",
+      "https://example.supabase.co/?token=secret",
+      "https://example.supabase.co/#private",
+    ]) {
+      const config = parseServerEnvironment({
+        ...configuredEnvironment,
+        NEXT_PUBLIC_SUPABASE_URL: supabaseUrl,
+      });
+      expect(config.supabase.url).toBeNull();
+      expect(config.writesAvailable).toBe(false);
+      expect(config.issues).toContainEqual(
+        expect.objectContaining({
+          key: "NEXT_PUBLIC_SUPABASE_URL",
+          code: "invalid",
+        }),
+      );
+    }
+
+    const insecurePublic = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      NEXT_PUBLIC_SUPABASE_URL: "http://example.supabase.co",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: "true",
+    });
+    expect(insecurePublic.supabase.url).toBeNull();
+    expect(insecurePublic.writesAvailable).toBe(false);
+    expect(insecurePublic.publicationReady).toBe(false);
+  });
+
+  it("rejects Supabase privileged keys from the browser-public slot", () => {
+    const serviceRoleJwt = [
+      Buffer.from(JSON.stringify({ alg: "HS256" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ role: "service_role" })).toString(
+        "base64url",
+      ),
+      "signature",
+    ].join(".");
+
+    for (const publishableKey of ["sb_secret_example", serviceRoleJwt]) {
+      const config = parseServerEnvironment({
+        ...configuredEnvironment,
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: publishableKey,
+      });
+      expect(config.supabase.publishableKey).toBeNull();
+      expect(config.supabase.configured).toBe(false);
+      expect(config.writesAvailable).toBe(false);
+      expect(config.issues).toContainEqual(
+        expect.objectContaining({
+          key: "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+          code: "forbidden",
+        }),
+      );
+    }
+  });
+
   it("does not serialize server secrets into public config", () => {
     const serverConfig = parseServerEnvironment(configuredEnvironment);
     const publicConfig = createPublicRuntimeConfig(
@@ -90,6 +173,31 @@ describe("parseServerEnvironment", () => {
     expect(serialized).not.toContain("postgresql://");
     expect(serialized).not.toContain("captcha-secret-sentinel");
     expect(serialized).not.toContain("rate-limit-secret-sentinel");
+  });
+
+  it("allow-lists public operator and policy information without approval internals", () => {
+    const serverConfig = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: "true",
+    });
+    const publicConfig = createPublicRuntimeConfig(
+      toPublicRuntimeConfigSource(serverConfig),
+    );
+
+    expect(publicConfig.operations).toEqual({
+      operatorName: "えまのわ運営テスト",
+      contactUrl: "https://support.emanowa.test/contact",
+    });
+    expect(publicConfig.publication).toMatchObject({
+      ready: true,
+      policyEffectiveDate: "2026-11-03",
+    });
+    expect(publicConfig.services.postingAvailable).toBe(true);
+    expect(publicConfig.publication).not.toHaveProperty("approved");
+    expect(JSON.stringify(publicConfig)).not.toContain("issues");
   });
 
   it("rejects demo mode in production instead of falling back", () => {
@@ -140,6 +248,7 @@ describe("parseServerEnvironment", () => {
         "postgresql://emanowa_app:secret@localhost:5432/emanowa",
     });
     expect(invalid.database.adminConfigured).toBe(false);
+    expect(invalid.writesAvailable).toBe(true);
     expect(invalid.issues).toContainEqual(
       expect.objectContaining({
         key: "ADMIN_DATABASE_URL",
@@ -215,17 +324,22 @@ describe("parseServerEnvironment", () => {
     expect(config.database.adminConfigured).toBe(true);
   });
 
-  it("requires CAPTCHA configuration for staging and production writes", () => {
+  it("requires CAPTCHA configuration for public posting without disabling recovery writes", () => {
     const config = parseServerEnvironment({
       ...configuredEnvironment,
+      ...publicationEnvironment,
       EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
       NEXT_PUBLIC_CAPTCHA_SITE_KEY: undefined,
       CAPTCHA_SECRET_KEY: undefined,
+      PUBLICATION_APPROVED: "true",
     });
 
     expect(config.captcha.required).toBe(true);
     expect(config.captcha.configured).toBe(false);
-    expect(config.writesAvailable).toBe(false);
+    expect(config.writesAvailable).toBe(true);
+    expect(config.postingAvailable).toBe(false);
+    expect(config.publicationReady).toBe(false);
     expect(toPublicRuntimeConfigSource(config).captchaRequired).toBe(true);
     expect(config.issues).toEqual(
       expect.arrayContaining([
@@ -253,6 +367,7 @@ describe("parseServerEnvironment", () => {
     const configured = parseServerEnvironment({
       ...configuredEnvironment,
       EMANOWA_ENVIRONMENT: "production",
+      APP_ORIGIN: "https://emanowa.test",
       RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
       TRUSTED_PROXY_HOPS: "1",
       ADMIN_DATABASE_URL:
@@ -260,13 +375,267 @@ describe("parseServerEnvironment", () => {
     });
     expect(configured.trustedProxyHops).toBe(1);
     expect(configured.writesAvailable).toBe(true);
+    expect(configured.postingAvailable).toBe(false);
+    expect(configured.publicationReady).toBe(false);
+  });
+
+  it("does not let publication-only dependencies disable recovery writes", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      ADMIN_DATABASE_URL: undefined,
+      NEXT_PUBLIC_CAPTCHA_SITE_KEY: undefined,
+      CAPTCHA_SECRET_KEY: undefined,
+      TRUSTED_PROXY_HOPS: undefined,
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: "true",
+    });
+
+    expect(config.writesAvailable).toBe(true);
+    expect(config.postingAvailable).toBe(false);
+    expect(config.publicationReady).toBe(false);
+    expect(config.database.adminConfigured).toBe(false);
+    expect(config.adminOperationsAvailable).toBe(false);
+    expect(config.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "ADMIN_DATABASE_URL" }),
+        expect.objectContaining({ key: "NEXT_PUBLIC_CAPTCHA_SITE_KEY" }),
+        expect.objectContaining({ key: "CAPTCHA_SECRET_KEY" }),
+        expect.objectContaining({ key: "TRUSTED_PROXY_HOPS" }),
+      ]),
+    );
+  });
+
+  it("keeps emergency admin operations independent from the ordinary DB connection", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      DATABASE_URL: undefined,
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: "true",
+    });
+
+    expect(config.dataMode).toBe("unconfigured");
+    expect(config.writesAvailable).toBe(false);
+    expect(config.postingAvailable).toBe(false);
+    expect(config.adminOperationsAvailable).toBe(true);
+  });
+
+  it("separates write recovery from production publication approval", () => {
+    const missingApproval = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+    });
+
+    expect(missingApproval.writesAvailable).toBe(true);
+    expect(missingApproval.postingAvailable).toBe(false);
+    expect(missingApproval.publicationReady).toBe(false);
+    expect(missingApproval.issues).toContainEqual(
+      expect.objectContaining({
+        key: "PUBLICATION_APPROVED",
+        code: "missing",
+        severity: "error",
+      }),
+    );
+
+    const approved = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: "true",
+    });
+
+    expect(approved.writesAvailable).toBe(true);
+    expect(approved.postingAvailable).toBe(true);
+    expect(approved.publicationReady).toBe(true);
+    expect(approved.publication).toEqual({
+      approved: true,
+      policyEffectiveDate: "2026-11-03",
+      retention: {
+        content:
+          "投稿内容は削除されるまで保存し、削除後は稼働DBから消去します。",
+        backups: "バックアップは作成から30日後に削除します。",
+        logs: "アクセスログは取得から90日後に削除します。",
+      },
+    });
+  });
+
+  it("allows staging readiness without production approval", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "staging",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: undefined,
+    });
+
+    expect(config.writesAvailable).toBe(true);
+    expect(config.postingAvailable).toBe(true);
+    expect(config.publication.approved).toBe(false);
+    expect(config.publicationReady).toBe(true);
+    expect(config.issues).not.toContainEqual(
+      expect.objectContaining({ key: "PUBLICATION_APPROVED" }),
+    );
+  });
+
+  it("requires explicit database mode before any public publication", () => {
+    for (const environment of ["staging", "production"] as const) {
+      const config = parseServerEnvironment({
+        ...configuredEnvironment,
+        ...publicationEnvironment,
+        EMANOWA_ENVIRONMENT: environment,
+        EMANOWA_DATA_MODE: undefined,
+        RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+        PUBLICATION_APPROVED: "true",
+      });
+
+      expect(config.dataMode).toBe("unconfigured");
+      expect(config.writesAvailable).toBe(false);
+      expect(config.adminOperationsAvailable).toBe(false);
+      expect(config.publicationReady).toBe(false);
+      expect(config.postingAvailable).toBe(false);
+      expect(config.issues).toContainEqual(
+        expect.objectContaining({
+          key: "EMANOWA_DATA_MODE",
+          code: "missing",
+          severity: "error",
+        }),
+      );
+    }
+  });
+
+  it("rejects insecure or placeholder public information without disabling writes", () => {
+    const insecureContact = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      CONTACT_URL: "http://support.emanowa.test/contact",
+      PUBLICATION_APPROVED: "true",
+    });
+    expect(insecureContact.writesAvailable).toBe(true);
+    expect(insecureContact.publicationReady).toBe(false);
+    expect(insecureContact.operations.contactUrl).toBeNull();
+
+    const placeholderRetention = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      BACKUP_RETENTION_NOTICE: "TODO: 後で設定します",
+      PUBLICATION_APPROVED: "true",
+    });
+    expect(placeholderRetention.writesAvailable).toBe(true);
+    expect(placeholderRetention.publicationReady).toBe(false);
+    expect(placeholderRetention.publication.retention.backups).toBeNull();
+
+    const invalidDate = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      POLICY_EFFECTIVE_DATE: "2026-02-30",
+      PUBLICATION_APPROVED: "true",
+    });
+    expect(invalidDate.writesAvailable).toBe(true);
+    expect(invalidDate.publicationReady).toBe(false);
+    expect(invalidDate.publication.policyEffectiveDate).toBeNull();
+  });
+
+  it("requires an HTTPS bare origin for staging and production", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      APP_ORIGIN: "http://emanowa.test",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: "true",
+    });
+
+    expect(config.appOrigin).toBeNull();
+    expect(config.writesAvailable).toBe(false);
+    expect(config.publicationReady).toBe(false);
+    expect(config.issues).toContainEqual(
+      expect.objectContaining({ key: "APP_ORIGIN", code: "invalid" }),
+    );
+  });
+
+  it("rejects loopback application, Supabase, and contact URLs publicly", () => {
+    for (const loopback of [
+      "https://localhost",
+      "https://127.0.0.1",
+      "https://[::1]",
+    ]) {
+      const app = parseServerEnvironment({
+        ...configuredEnvironment,
+        ...publicationEnvironment,
+        EMANOWA_ENVIRONMENT: "production",
+        APP_ORIGIN: loopback,
+        RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+        PUBLICATION_APPROVED: "true",
+      });
+      expect(app.appOrigin).toBeNull();
+      expect(app.publicationReady).toBe(false);
+
+      const supabase = parseServerEnvironment({
+        ...configuredEnvironment,
+        ...publicationEnvironment,
+        EMANOWA_ENVIRONMENT: "production",
+        NEXT_PUBLIC_SUPABASE_URL: loopback,
+        RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+        PUBLICATION_APPROVED: "true",
+      });
+      expect(supabase.supabase.url).toBeNull();
+      expect(supabase.publicationReady).toBe(false);
+
+      const contact = parseServerEnvironment({
+        ...configuredEnvironment,
+        ...publicationEnvironment,
+        EMANOWA_ENVIRONMENT: "production",
+        CONTACT_URL: `${loopback}/contact`,
+        RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+        PUBLICATION_APPROVED: "true",
+      });
+      expect(contact.operations.contactUrl).toBeNull();
+      expect(contact.publicationReady).toBe(false);
+    }
+  });
+
+  it("blocks P0 publication when a future capability is enabled", () => {
+    const config = parseServerEnvironment({
+      ...configuredEnvironment,
+      ...publicationEnvironment,
+      EMANOWA_ENVIRONMENT: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      ENABLE_GROUPS: "true",
+      PUBLICATION_APPROVED: "true",
+    });
+
+    expect(config.writesAvailable).toBe(true);
+    expect(config.postingAvailable).toBe(false);
+    expect(config.publicationReady).toBe(false);
+    expect(config.issues).toContainEqual(
+      expect.objectContaining({
+        key: "ENABLE_GROUPS",
+        code: "forbidden",
+        severity: "error",
+      }),
+    );
   });
 
   it("fails closed when NODE_ENV is production but deployment environment is omitted", () => {
     const config = parseServerEnvironment({
       ...configuredEnvironment,
+      ...publicationEnvironment,
       EMANOWA_ENVIRONMENT: undefined,
       NODE_ENV: "production",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
+      PUBLICATION_APPROVED: "true",
     });
 
     expect(config.environment).toBe("production");
@@ -284,8 +653,11 @@ describe("parseServerEnvironment", () => {
   it("keeps production CAPTCHA required when the deployment environment is invalid", () => {
     const config = parseServerEnvironment({
       ...configuredEnvironment,
+      ...publicationEnvironment,
       EMANOWA_ENVIRONMENT: "prod",
       NODE_ENV: "production",
+      APP_ORIGIN: "https://emanowa.test",
+      RATE_LIMIT_HMAC_SECRET: "x".repeat(32),
       NEXT_PUBLIC_CAPTCHA_SITE_KEY: undefined,
       CAPTCHA_SECRET_KEY: undefined,
     });

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   adminReportSchema,
+  adminWorldPostingSchema,
   moderationInputSchema,
   moderationReceiptSchema,
+  setWorldPostingInputSchema,
   updateReportInputSchema,
 } from "./contracts";
 
@@ -100,6 +102,34 @@ describe("admin contracts", () => {
       adminReportSchema.safeParse({
         ...report,
         ema: { ...report.ema, status: "hidden", messageText: null },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps emergency posting operations narrow and versioned by current state", () => {
+    expect(
+      setWorldPostingInputSchema.safeParse({
+        postingEnabled: false,
+        expectedPostingEnabled: true,
+        reasonCode: "incident",
+      }).success,
+    ).toBe(true);
+    expect(
+      setWorldPostingInputSchema.safeParse({
+        postingEnabled: false,
+        expectedPostingEnabled: true,
+        reasonCode: "free text is not retained",
+      }).success,
+    ).toBe(false);
+    expect(
+      adminWorldPostingSchema.safeParse({
+        worldSlug: "2027",
+        worldName: "2027年のえまのわ",
+        state: "preview",
+        postingEnabled: false,
+        opensAt: "2026-12-19T15:00:00.000Z",
+        closesAt: "2027-12-31T15:00:00.000Z",
+        updatedAt: "2026-11-03T00:00:00.000Z",
       }).success,
     ).toBe(true);
   });

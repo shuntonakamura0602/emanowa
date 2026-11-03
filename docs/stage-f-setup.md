@@ -150,9 +150,9 @@ Auth側にもanonymous sign-inとOTP送信のrate limitを設定し、アプリ�
 
 hidden/deletedは公開詳細、一覧、random、chunk識別情報、HTML/RSC、metadata、OG/正方形PNGから404または占有だけの応答になります。owner-only本文は管理一覧にも出しません。
 
-## 新規受付の一時停止
+## 新規受付の一時停止（Stage H以降のbreak-glass）
 
-不正利用や障害時に新規配置だけを止める場合は、migration/運用接続で対象worldの `posting_enabled=false` を設定します。worldをarchivedへ変更しません。新規作成は409 `POSTING_PAUSED`になり、閲覧、本人削除、公開範囲の縮小、通報、管理操作は継続します。再開は同じ接続で `posting_enabled=true` とし、DB現在時刻、world state、受付期間の条件も満たすことを確認します。
+Stage H以降の通常手順は、fresh Auth・TOTP AAL2・有効な管理者台帳を満たす管理画面/APIです。以下の直接SQLはAuthまたは管理API自体が利用不能な場合だけ、二名承認したbreak-glassとして使います。不正利用や障害時もworldをarchivedへ変更せず、対象worldの `posting_enabled` だけを切り替えます。新規作成は409 `POSTING_PAUSED`になり、閲覧、本人削除、公開範囲の縮小、通報、管理操作は可能な範囲で継続します。
 
 上のTLS・対話password手順で接続した `psql` sessionで、対象slugと新しい値を明示して次を実行します。`slug` は一意制約を持ち、更新が0行なら `1 / count(*)` がtransactionを失敗させるためcommitされません。停止時は `false`、再開時は内容を確認して `true` の一方だけを実行します。
 
@@ -164,7 +164,8 @@ hidden/deletedは公開詳細、一覧、random、chunk識別情報、HTML/RSC�
 begin;
 with updated as (
   update app_private.worlds
-     set posting_enabled = :'new_posting_enabled'::boolean
+     set posting_enabled = :'new_posting_enabled'::boolean,
+         updated_at = transaction_timestamp()
    where slug = :'world_slug'
   returning slug, posting_enabled
 )
@@ -175,7 +176,7 @@ select min(slug) as updated_slug,
 commit;
 ```
 
-変更前後に対象slug、変更者、変更時刻、理由を運営記録へ残します。migration接続を常駐アプリやブラウザーへ渡さず、複数worldを一括更新しません。
+変更前後に対象slug、変更者、変更時刻、理由、承認者、実行SQLのhashをincident記録へ残し、管理系復旧後にAPIの状態と監査欠落を照合します。migration接続を常駐アプリやブラウザーへ渡さず、複数worldを一括更新しません。
 
 ## staging / production確認
 

@@ -2,19 +2,24 @@ import Link from "next/link";
 
 import { PageIntro, StageCard } from "@/components/site-shell";
 import { FEATURED_WORLD_SLUG } from "@/config/worlds";
+import { getPublicRuntimeConfig } from "@/server/config";
 
 export const metadata = {
   title: "えまのわについて",
 };
 
 export default function AboutPage() {
+  const { operations } = getPublicRuntimeConfig();
+
   return (
     <section className="container page-section">
       <PageIntro eyebrow="えまのわについて" title="願いを掛け、近くに招く場所">
         <p>
           えまのわは、年ごとの100万枠に一人一枚の絵馬を掛け、みんなの願いを眺められる日本語のオンラインサービスです。
         </p>
-        <p>神社の参拝・祈祷や宗教上の効力を約束するものではありません。</p>
+        <p>
+          特定の神社・寺院・宗教団体が提供するものではない、独立した参加型サービスです。参拝・祈祷や宗教上の効力を約束するものではありません。
+        </p>
       </PageIntro>
 
       <div className="card-grid">
@@ -62,6 +67,25 @@ export default function AboutPage() {
             <span className="muted">地図にも個別URLにも本文を出しません。</span>
           </div>
         </div>
+      </section>
+
+      <section
+        className="page-section--compact"
+        aria-labelledby="operator-title"
+      >
+        <p className="eyebrow">運営情報</p>
+        <h2 id="operator-title">運営者と問い合わせ先</h2>
+        {operations.operatorName && operations.contactUrl ? (
+          <p>
+            運営者は{operations.operatorName}です。サービスに関する連絡は
+            <a href={operations.contactUrl}>お問い合わせ窓口</a>
+            から受け付けます。
+          </p>
+        ) : (
+          <p className="muted">
+            運営者情報と問い合わせ先は公開準備中です。本番公開前に実際の情報を掲示します。
+          </p>
+        )}
       </section>
 
       <Link className="button" href={"/w/" + FEATURED_WORLD_SLUG}>

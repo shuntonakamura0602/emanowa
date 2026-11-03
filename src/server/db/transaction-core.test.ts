@@ -50,12 +50,11 @@ describe("runDatabaseTransaction", () => {
     expect(database.calls).toEqual([
       { text: "begin", values: undefined },
       {
-        text: "select set_config('app.actor_id', $1, true)",
-        values: [""],
-      },
-      {
-        text: "select set_config('app.lookup_public_id', $1, true)",
-        values: [""],
+        text: `select
+         set_config('app.actor_id', $1, true),
+         set_config('app.lookup_public_id', $2, true),
+         set_config('app.auth_aal', $3, true)`,
+        values: ["", "", ""],
       },
       { text: "commit", values: undefined },
     ]);
@@ -72,17 +71,35 @@ describe("runDatabaseTransaction", () => {
       },
     );
 
-    expect(database.calls.slice(1, 4)).toEqual([
+    expect(database.calls.slice(1, 3)).toEqual([
       {
-        text: "select set_config('app.actor_id', $1, true)",
-        values: [ACTOR_A],
-      },
-      {
-        text: "select set_config('app.lookup_public_id', $1, true)",
-        values: [PUBLIC_ID],
+        text: `select
+         set_config('app.actor_id', $1, true),
+         set_config('app.lookup_public_id', $2, true),
+         set_config('app.auth_aal', $3, true)`,
+        values: [ACTOR_A, PUBLIC_ID, ""],
       },
       { text: "select operation()", values: [] },
     ]);
+  });
+
+  it("sets the verified assurance level only when the caller supplies it", async () => {
+    const database = fakeDatabase();
+    await runDatabaseTransaction(
+      database.pool,
+      { actorId: ACTOR_A, authAssurance: "aal2" },
+      async () => {},
+    );
+
+    expect(
+      database.calls.find((call) => call.text.includes("app.auth_aal")),
+    ).toEqual({
+      text: `select
+         set_config('app.actor_id', $1, true),
+         set_config('app.lookup_public_id', $2, true),
+         set_config('app.auth_aal', $3, true)`,
+      values: [ACTOR_A, "", "aal2"],
+    });
   });
 
   it("sets actor context for every transaction when a pooled client is reused", async () => {
@@ -101,9 +118,9 @@ describe("runDatabaseTransaction", () => {
     const actorCalls = database.calls.filter((call) =>
       call.text.includes("app.actor_id"),
     );
-    expect(actorCalls.map((call) => call.values)).toEqual([
-      [ACTOR_A],
-      [ACTOR_B],
+    expect(actorCalls.map((call) => call.values?.[0])).toEqual([
+      ACTOR_A,
+      ACTOR_B,
     ]);
     expect(database.release).toHaveBeenCalledTimes(2);
   });

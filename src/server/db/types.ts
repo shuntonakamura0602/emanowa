@@ -15,4 +15,5 @@ export interface DatabasePool {
 export type TransactionContext = {
   actorId: string | null;
   publicLookupId?: string | null;
+  authAssurance?: "aal2" | null;
 };
