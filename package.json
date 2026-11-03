@@ -31,6 +31,7 @@
     "test:stage-d": "supabase db reset --local && bash scripts/test-local-db.sh && node scripts/stage-b-integration.mjs && node scripts/stage-c-integration.mjs && node scripts/stage-d-integration.mjs",
     "test:stage-e": "supabase db reset --local && bash scripts/test-local-db.sh && node scripts/stage-b-integration.mjs && node scripts/stage-c-integration.mjs && node scripts/stage-d-integration.mjs && node scripts/stage-e-integration.mjs",
     "test:stage-f": "supabase db reset --local && bash scripts/test-local-db.sh && pnpm db:lint && node scripts/stage-b-integration.mjs && node scripts/stage-c-integration.mjs && node scripts/stage-d-integration.mjs && node scripts/stage-e-integration.mjs && node scripts/stage-f-integration.mjs",
+    "test:stage-g": "pnpm test:stage-f && node scripts/stage-d-integration.mjs && node scripts/stage-g-browser.mjs && node scripts/stage-g-recovery.mjs",
     "demo:seed": "node scripts/demo-seed.mjs",
     "demo:clear": "node scripts/demo-clear.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
@@ -45,6 +46,8 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@types/react": "19.3.0",

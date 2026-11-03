@@ -157,6 +157,7 @@ export function OwnerDashboard({
         preserveDraftFor?: { publicId: string; version: number };
         afterRecovery?: boolean;
         preserveInterruptedMutation?: boolean;
+        preserveAuthPanel?: boolean;
         background?: boolean;
       } = {},
     ): Promise<OwnerEma | null> => {
@@ -213,7 +214,9 @@ export function OwnerDashboard({
           ) {
             setLoadState("auth_required");
             setAuthSessionKind("none");
-            setAuthPanelKey((current) => current + 1);
+            if (!options.preserveAuthPanel) {
+              setAuthPanelKey((current) => current + 1);
+            }
             if (!options.preserveDraftFor || options.afterRecovery) {
               discardUnverifiedPrivateState();
             }
@@ -361,6 +364,7 @@ export function OwnerDashboard({
       const refreshed = await loadOwner({
         preserveDraftFor,
         preserveInterruptedMutation,
+        preserveAuthPanel: outcome !== "link_succeeded",
         background: true,
       });
       if (transitionGeneration !== authTransitionGenerationRef.current) return;

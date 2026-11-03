@@ -16,9 +16,7 @@ export function SiteHeader() {
     <header className="site-header">
       <div className="site-header__inner">
         <Link className="brand" href="/" aria-label="えまのわ ホーム">
-          <span className="brand__mark" aria-hidden="true">
-            わ
-          </span>
+          <span className="brand__mark" aria-hidden="true" />
           <span>えまのわ</span>
         </Link>
         <nav className="site-nav" aria-label="主なメニュー">
@@ -35,7 +33,7 @@ export function ConnectionNotice() {
   const { services } = getPublicRuntimeConfig();
   const connectionMessage =
     services.status === "ready"
-      ? "地図・一覧・投稿・本人管理・共有・近くへの招待を利用できます。通報と運用機能は後続の段階で追加します。"
+      ? "地図・一覧・投稿・本人管理・共有・近くへの招待・通報を利用できます。"
       : services.status === "development_demo"
         ? "開発用サンプルが選択されています。本番保存や実際の投稿としては扱いません。"
         : "外部サービスは未接続です。入力画面は確認できますが、保存と本人管理は利用できません。";
@@ -45,7 +43,7 @@ export function ConnectionNotice() {
       <div className="container connection-notice__inner">
         <span className="status-dot" aria-hidden="true" />
         <p>
-          <strong>段階E：共有と近くへの招待。</strong> {connectionMessage}
+          <strong>段階G：品質と障害回復。</strong> {connectionMessage}
         </p>
       </div>
     </aside>

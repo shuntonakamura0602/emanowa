@@ -18,4 +18,10 @@ describe("OwnerDashboardの編集URL所有権契約", () => {
     expect(source).toContain("emaMatchesExpectedPublicId");
     expect(source).toContain("別の利用者の内容は表示していません");
   });
+
+  it("認証コード失敗後の再確認では入力中の認証パネルを保持する", () => {
+    expect(source).toContain("preserveAuthPanel?: boolean");
+    expect(source).toContain('preserveAuthPanel: outcome !== "link_succeeded"');
+    expect(source).toContain("if (!options.preserveAuthPanel)");
+  });
 });

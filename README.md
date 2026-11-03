@@ -2,7 +2,7 @@
 
 みんなの願いが集まる、日本語のオンライン絵馬サービスです。
 
-P0 の段階F「通報・運用・不正利用対策」まで実装済みです。投稿・本人管理・Canvas地図・公開探索・共有・招待に加え、通報、TOTP MFA付き管理画面、非表示・復帰・削除、監査、複数instanceで共有するDB rate limitを用意しています。
+P0 の段階G「性能・アクセシビリティ・回復」まで実装済みです。投稿・本人管理・Canvas地図・公開探索・共有・招待、通報、TOTP MFA付き管理画面、非表示・復帰・削除、監査、複数instanceで共有するDB rate limitに加え、実ブラウザーの性能・アクセシビリティ検証、障害時の再試行、バックアップ復旧後の再非公開化訓練を用意しています。
 
 ## 必要な環境
 
@@ -10,6 +10,7 @@ P0 の段階F「通報・運用・不正利用対策」まで実装済みです�
 - pnpm 11.25.0（`package.json#packageManager` で固定）
 - Docker Desktop（ローカルSupabase/Postgres/Authの統合試験に使用）
 - Supabase CLI 2.122.0（devDependencyとして固定）
+- Google Chrome（段階Gの実ブラウザー検証に使用。macOSの標準配置以外は `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` で指定）
 - 外部設定なしでも画面・型・ユニットテスト・ビルドは確認でき、DockerがあればDB/Auth統合試験まで実行できます
 
 システムの既定 `node` が古い場合は、リポジトリで固定した Node を先に選択してください。
@@ -41,7 +42,7 @@ pnpm db:reset
 pnpm db:local-role
 ```
 
-最後のコマンドが表示するローカル専用 `DATABASE_URL` と `ADMIN_DATABASE_URL`、`pnpm exec supabase status --output env` のAPI URL / publishable key、`openssl rand -hex 32` で生成したdevelopment専用 `RATE_LIMIT_HMAC_SECRET` を `.env.local` に設定します。HMAC secretはdevelopmentでも変更要求に必須です。詳しい値、cloud設定、限定roleの作り方は [docs/stage-b-setup.md](docs/stage-b-setup.md)、メールOTPと段階Cの確認方法は [docs/stage-c-setup.md](docs/stage-c-setup.md)、地図・探索は [docs/stage-d-setup.md](docs/stage-d-setup.md)、共有・招待は [docs/stage-e-setup.md](docs/stage-e-setup.md)、通報・管理者MFA・共有rate limitは [docs/stage-f-setup.md](docs/stage-f-setup.md) にあります。
+最後のコマンドが表示するローカル専用 `DATABASE_URL` と `ADMIN_DATABASE_URL`、`pnpm exec supabase status --output env` のAPI URL / publishable key、`openssl rand -hex 32` で生成したdevelopment専用 `RATE_LIMIT_HMAC_SECRET` を `.env.local` に設定します。HMAC secretはdevelopmentでも変更要求に必須です。詳しい値、cloud設定、限定roleの作り方は [docs/stage-b-setup.md](docs/stage-b-setup.md)、メールOTPと段階Cの確認方法は [docs/stage-c-setup.md](docs/stage-c-setup.md)、地図・探索は [docs/stage-d-setup.md](docs/stage-d-setup.md)、共有・招待は [docs/stage-e-setup.md](docs/stage-e-setup.md)、通報・管理者MFA・共有rate limitは [docs/stage-f-setup.md](docs/stage-f-setup.md)、ブラウザー性能・アクセシビリティ・復旧訓練は [docs/stage-g-setup.md](docs/stage-g-setup.md) にあります。
 
 停止するときは次を実行します。
 
@@ -70,7 +71,7 @@ pnpm supabase:stop
 
 Supabase を接続するときは、プロジェクトの Connect 画面から URL と publishable key を取得します。匿名サインイン、manual linking、TOTP MFAを有効にし、SSRは `@supabase/ssr` のCookie方式で構成します。`DATABASE_URL` はtransaction poolerの `emanowa_app`、`ADMIN_DATABASE_URL` は別secretの `emanowa_admin_app` に限定され、username、password、host、port、database、remoteの安全な `sslmode` をURLへ明示します。`postgres`、テーブル所有者、`BYPASSRLS`、`service_role`、query/ambient `PG*` による接続契約の上書きは拒否します。migration接続とは分離してください。staging/productionではCAPTCHA site/secret、32バイト以上のrate-limit HMAC secret、信頼proxy段数が揃わない変更要求をfail closedにします。
 
-## 段階FまでのAPI
+## 段階G時点のP0 API
 
 現在の同一オリジンBFFは次を実装しています。公開概要だけは内容を持たない集計として共有キャッシュ最大30秒、それ以外の公開・本人応答は `no-store` です。
 
@@ -112,15 +113,15 @@ pnpm test
 pnpm build
 ```
 
-Docker上の実DB/Auth、段階Eの共有・招待、段階Fの通報・実TOTP AAL2・2instance制限を含む検証は、Supabase起動後に実行します。
+Docker上の実DB/Auth、段階Eの共有・招待、段階Fの通報・実TOTP AAL2・2instance制限、段階Gの実ブラウザー・障害回復・ローカルbackup/restore訓練を含む検証は、Supabase起動後に実行します。
 
 注意: 次のコマンドはローカルSupabase DBの全データを削除し、migrationから再作成します。必要なローカルデータは先に退避してください。remote DBには使用できません。
 
 ```bash
-pnpm test:stage-f
+pnpm test:stage-g
 ```
 
-`test:stage-f` は段階B〜Eの回帰に加え、DB reset、全pgTAP、通報の重複・冪等性・plain text、各rate limit境界、2つのproduction serverでの共有状態、store障害時のfail closed、実Supabase TOTPのAAL2、管理者台帳の即時無効化、非表示・復帰・削除・通報解決・公開全経路・監査を確認します。段階Eまでは `pnpm test:stage-e`、段階Dまでは `pnpm test:stage-d`、段階Cまでは `pnpm test:stage-c`、段階Bだけは `pnpm test:stage-b`、DB契約だけは `pnpm test:db` で再実行できます。
+`test:stage-g` は段階B〜Fの回帰、DB reset、全pgTAP、DB lintに加え、Google Chromeでの代表幅・axe WCAG 2.2 AA・キーボード・focus・reduced motion、密集地図と20同時投稿の性能、通信切断・OTP遅延・画像生成失敗・DB停止、ローカル論理backup/restore後の非表示・削除再適用を確認します。ローカル `app_private` schemaを一度削除して復元するため、必要なローカルデータは必ず先に退避してください。段階Fまでは `pnpm test:stage-f`、段階Eまでは `pnpm test:stage-e`、段階Dまでは `pnpm test:stage-d`、段階Cまでは `pnpm test:stage-c`、段階Bだけは `pnpm test:stage-b`、DB契約だけは `pnpm test:db` で再実行できます。
 
 静的検証をまとめて実行する場合は次を使います。
 
@@ -150,8 +151,10 @@ pnpm demo:clear
 - cloud Supabase、CAPTCHA、通常/admin DB secret、rate-limit HMAC secret、信頼proxy段数、本番MFA factorはリポジトリに設定していません。設定不足時はデモへ切り替えず変更要求を拒否します
 - cloud SupabaseでのSMTP到達性、CAPTCHA、stagingドメインのCookie/OTP E2Eは、実project設定後の確認が必要です
 - 複数タブの所有者切替競合を防ぐため、投稿・本人取得/更新/削除・メール追加/復帰要求・OTP検証・ログアウトにはWeb Locks対応ブラウザーが必要です。未対応時は安全側で操作を拒否します
-- Canvasのタッチ・ピンチ、キーボード、スクリーンリーダー、360/390/768/1440pxの視覚確認と、密集地図を10秒移動した30fps目標は実ブラウザー・実機での最終確認が必要です
-- 実X/LINEアプリでの送信、SNS crawlerのOG表示、Clipboard/画像保存、360/390/768/1440px、キーボード、スクリーンリーダーは、stagingと代表端末での最終確認が必要です
+- Google Chromeのheadless実ブラウザーでは360/390/768/1440px、キーボード、dialog focus、reduced motion、axe WCAG 2.2 AA、密集地図10秒の30fps目標を確認済みです。実端末のタッチ・ピンチ、手動スクリーンリーダー、OSごとの視覚確認はstagingで必要です
+- 実X/LINEアプリでの送信、SNS crawlerのOG表示、実端末のClipboard/画像保存は、stagingと代表端末での最終確認が必要です
+- 段階GのLCP、転送量、API p95、fpsはローカルproduction buildと通信・CPUエミュレーションの値であり、公開環境の実利用p75、リージョン間遅延、cloudの20同時性能を保証しません
+- ローカルでは論理backup/restoreと削除・非公開化の再適用を確認済みですが、本番backupの保存先、暗号化、保持期間、PITR、復旧権限、定期訓練は段階Hで確定する必要があります
 - provider-neutralな計測eventは実装済みですが、本番analytics collectorは未設定です。本文・表示名・メール・公開ID・URL・認証情報を送らない接続が必要です
 - cloudの複数instance、実proxy header、Turnstile/Auth側rate limit、管理当番・問い合わせ・法的エスカレーションは公開環境での設定と確認が必要です
 - P1/P2 のグループ、成就、課金は機能フラグを含め既定で無効です

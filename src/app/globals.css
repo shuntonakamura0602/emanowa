@@ -156,6 +156,10 @@ h2 {
   place-items: center;
 }
 
+.brand__mark::before {
+  content: "わ";
+}
+
 .site-nav,
 .footer-nav {
   display: flex;

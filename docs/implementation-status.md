@@ -1,6 +1,6 @@
 # 実装状況
 
-更新日: 2026-10-29
+更新日: 2026-11-03
 
 ## 段階A — 土台と契約
 
@@ -295,3 +295,50 @@ DB migration / 設定変更:
 
 次に実装する段階:
 : 段階G「品質と障害回復」。全試験表、ブラウザー性能・アクセシビリティ、ネットワーク切断・再送・認証切替・DB/Auth障害、backup/restoreを含む回復経路を検証する。
+
+## 段階G — 性能・アクセシビリティ・回復
+
+対象段階:
+: P0 段階G「性能・アクセシビリティ・回復」（実装・実ブラウザー・ローカル障害注入・復旧訓練・最終全体回帰完了）
+
+実装した体験:
+: 画面segmentとrootの予期しない失敗に、日本語の再試行操作を持つerror boundaryを追加した。公開エラーには内部例外や接続情報を出さず、root障害でも読み込み直しへ進める。画像rendererの失敗は `no-store` の503とし、描画中に作品がhidden/deletedへ変わった場合は古い画像bytesを返さず `no-store` の404にする契約を単体試験へ追加した。
+
+: Google ChromeとPlaywrightによるローカルproduction buildの検証を追加した。360/390/768/1440pxのworld、390pxのhome・作成・個別詳細・本人管理、390/1440pxの招待経路で横overflow、44px操作領域、axe WCAG 2.2 AAを確認する。Canvasのキーボード操作、reduced motion、共有・通報dialogのfocus復帰、画像失敗時のURL共有代替も実操作で確認する。
+
+: DB保存後にHTTP応答だけを切断し、同じ内容とIdempotency-Keyで元のreceiptへ復元する経路を実ブラウザーで確認した。別タブのログアウト後に古い本人応答が遅着しても秘密状態を表示しないことを確認した。OTP送信遅延中は多重送信を止め、無効・期限切れの確認後もコード入力、期限、再送案内を保持するよう、失敗後のbackground再確認で認証panelをremountしない修正を行った。通常のsignoutや認証文脈確定時のresetは維持する。
+
+: DB接続不能を注入し、公開APIが `no-store` の503と安全な `TEMPORARILY_UNAVAILABLE` を返し、画面が内部情報を含まない再試行導線を示すことを確認した。ローカル `app_private` のschema/data論理backupを取得し、その後のhide/deleteを古いbackupが巻き戻す事故を再現した。本文を持たないprivacy replay台帳から同じ監査付きmoderation関数でhide/deleteを再適用し、API、HTML、OG/正方形PNG、一覧、対象chunkで再露出しないことを確認した。
+
+主な変更ファイル:
+: `scripts/stage-g-browser.mjs`、`scripts/stage-g-recovery.mjs`、`src/app/error.tsx`、`src/app/global-error.tsx`、`src/app/api/v1/worlds/[slug]/emas/[id]/image/route.test.ts`、`src/components/ema/owner-dashboard.tsx`、`src/components/ema/owner-dashboard.test.ts`、`src/components/site-shell.tsx`、`src/app/globals.css`、`package.json`、`pnpm-lock.yaml`、`docs/stage-g-setup.md`
+
+DB migration / 設定変更:
+: DB migrationと新しいruntime環境変数はない。検証用devDependencyとして `@playwright/test 1.64.1` と `@axe-core/playwright 4.14.0` をlockfileへ固定した。macOSの標準Chrome配置以外では、検証processだけに任意の `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` を指定できる。復旧訓練はremote、staging、production、Postgres port 54322以外を拒否する。
+
+検証した経路と結果:
+: Node.js `24.17.0`、Next.js `16.4.3`、macOSのGoogle Chrome headless、ローカルSupabase/Postgresで実行した。密集400件の非圧縮chunkを15回取得し、p95 103.71ms、最大155,394 bytesで512KiB目標内だった。独立した匿名20利用者の同時投稿は20/20件成功、p95 279.35msで2秒目標内だった。
+
+: 390×844、150ms latency、1.6Mbps down、750kbps up、CPU×4のエミュレーションで公開地図のLCPは744ms、navigation/resourceの転送量は242,295 bytesだった。390×844の密集地図を10秒操作した描画は60.06fpsで30fps目標を満たした。axe WCAG 2.2 AAは対象画面・代表幅で違反0件、横overflowと44px未満の主要操作も0件だった。
+
+: 応答切断後の冪等復元、別タブログアウト後の遅着応答破棄、OTP遅延・失敗時の状態保持、画像503時の代替共有、DB停止時の503と再試行画面を実ブラウザーで確認した。画像renderer失敗と描画後の公開縮小を含む対象単体4件とTypeScript検査は成功した。ローカルbackup/restore訓練は、古いbackupによる公開巻き戻しの再現、hide/delete再適用、監査、全対象公開経路の非露出まで成功した。
+
+: clean DBから `pnpm test:stage-g` を通し、pgTAP合計260件、DB lint 0件、段階B〜FのAuth・所有権・100件同時枠競合・本人管理・地図・共有・招待・通報・AAL2・複数instance rate limitと、段階Gの実ブラウザー・障害注入・復旧訓練がすべて成功した。`pnpm check` もformat、ESLint、TypeScript、Vitest 46 files / 325 testsを含めて成功し、`pnpm audit --prod` は既知の脆弱性0件だった。
+
+実行していない検証と理由:
+: cloud Supabase、staging、CDN/reverse proxy、Turnstile、SMTP、本番MFA、本番backup/PITRは未接続のため、公開環境のLCP p75、リージョン間遅延、cloudの20同時投稿、CDNの非保持、Auth/Storageを含む完全restore、実復旧時間は未確認である。ローカル結果を本番性能保証として扱わない。
+
+: Chrome headlessとaxeでは代表幅、キーボード、focus、reduced motionを確認したが、実端末のタッチ・ピンチ、VoiceOver/TalkBack等の手動スクリーンリーダー、OS別の視覚確認、実X/LINEアプリ、SNS crawler、実端末Clipboard/画像保存はstagingで最終確認が必要である。
+
+: privacy replay台帳はローカル試験中だけ一時作成した。本番の保存先、暗号化、保持期間、改ざん防止、アクセス権、PITR、復旧担当と承認、管理role password再設定、定期訓練は段階Hの運用合意が必要である。
+
+仕様からの変更と理由:
+: P0の意味の変更はない。backup取得後の削除・非公開化が古いrestoreで巻き戻る危険を明示し、配信再開前に本文を持たない別台帳から同じ監査付き操作を再適用する判断を `docs/decisions.md` のADR-G-001へ記録した。アクセシブルなブランド名修正は見た目の「わ」をCSS pseudo-elementへ移し、linkのaccessible nameと表示文字を一致させたもので、表示するサービス名は変えていない。
+
+既知の問題・外部設定が必要な項目:
+: cloud Supabase、通常/admin DB secret、正確な `TRUSTED_PROXY_HOPS`、Turnstile、SMTP、本番MFA、analytics collector、監視、backup/PITR、運営者情報、問い合わせ先は未設定である。設定不足時はdemoやprocess内状態へ切り替えず、変更要求を安全側で拒否する既存契約を維持する。
+
+: Supabaseの管理backupはカスタムDB role passwordを含まないため、restore後に通常/admin roleへ異なるsecretを再設定し、owner/provisionerを `NOLOGIN` のまま確認する必要がある。古いbackupを戻しただけで配信を再開せず、hide/delete等の再適用と全公開経路の非露出確認を先に行う。
+
+次に実装する段階:
+: 段階H「公開環境の準備」。staging/production設定、world受付期間、ドメイン、運営情報、監視、cloud backup/PITR、復旧台帳、受付停止、公開環境の投稿・共有・本人管理・削除・通報E2Eを確定する。

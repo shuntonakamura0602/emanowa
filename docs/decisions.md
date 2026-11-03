@@ -231,3 +231,15 @@ TOTPのQR、秘密鍵、6桁code、factor/challenge情報はAuth SDKとReactの�
 通報は理由列挙と200書記素・2KiBのplain textだけを受け、同じreporter/emaのopen行を部分一意索引とadvisory lockで1件にする。同じ冪等keyは同じreceipt、別keyの重複open通報は既存IDを200で返す。通報件数を作品状態へ連動させず、通報者情報を管理DTOや公開応答へ出さない。
 
 hide/restore/deleteは管理専用関数で対象行とworldをロックし、expected version、現在の有効管理者、列挙理由を再確認する。原本、公開投影、占有、chunk count/revision、冪等receipt、監査を同じtransactionで更新する。監査にはadmin/ema内部ID、action/reason、前後状態、時刻だけを残し、本文、表示名、通報detail、メールを保存しない。owner-only本文は管理一覧にも出さず、hidden/deletedは新しい公開応答から同期的に除外する。
+
+## ADR-G-001: 復旧後は削除・非公開化を配信再開前に再適用する
+
+- 状態: 採用
+- 日付: 2026-11-03
+- 関連仕様: 07 段階G・ACCESS-07・ACCESS-09・ACCESS-10・公開前チェック「復旧」
+
+backupは取得後に行われたhide、delete、公開範囲縮小を含まないため、古いsnapshotを戻しただけでは過去に非公開化した内容を再露出し得る。restore完了を配信再開の条件とせず、backup取得後のprivacy操作を再適用し、全公開経路の非露出を確認するまで通常配信を再開しない。
+
+再適用の正本はbackupとは別のappend-only台帳とし、`publicId`、`hide|delete`、expected version、Idempotency-Key、列挙済み理由だけを保持する。願い本文、表示名、メール、通報補足、Auth token、DB内部IDは入れない。台帳の本番保存先、暗号化、保持期間、改ざん防止、アクセス権、担当と承認は段階Hで環境ごとに確定する。
+
+restore後は通常/admin roleの資格情報と権限分離を再構成し、同じversion・冪等性・監査を持つ管理用moderation関数で台帳を再生する。API、HTML、RSC、metadata、OG/PNG、一覧、random、nearby、対象chunk、CDNを確認し、削除・非公開化した内容が出ないことを配信再開前に検証する。ローカル訓練は古い論理backupによる公開巻き戻しを実際に再現してからhide/deleteを再適用し、この順序とfail-private条件を検証する。
